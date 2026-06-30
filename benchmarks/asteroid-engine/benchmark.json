@@ -1,0 +1,30 @@
+{
+  "id": "asteroid-engine",
+  "name": "Asteroid Engine Demo — Modernize & One-Command Build",
+  "summary": "Modernize a 2010 C++/OpenGL/OpenAL 2D game engine + asteroid demo so it builds and runs on a current machine with a single command and zero manual dependency installs.",
+  "category": "C++ / native / build-systems",
+  "difficulty": "hard",
+  "source": {
+    "description": "A platform-independent 2D game engine (OpenGL + GLUT + OpenAL/alut) and an asteroid demo built on it. The engine repo is the standalone library plus a reference desktop demo; the demo repo adds the packaged desktop + iPhone versions. Both are provided as the model may need to modify engine code.",
+    "repos": [
+      {
+        "name": "Game_Engine",
+        "url": "https://github.com/ralphsmith80/Game_Engine",
+        "commit": "6ad9544638c247de0ead285a5e36b244949cf036"
+      },
+      {
+        "name": "Asteroid_Demo",
+        "url": "https://github.com/ralphsmith80/Asteroid_Demo",
+        "commit": "94567640000cf0ad7fdfef95b0ea5cd972c1d281"
+      }
+    ]
+  },
+  "scripts": {
+    "setup": "scripts/setup.sh",
+    "verify": "scripts/verify.sh"
+  },
+  "files": {
+    "task": "TASK.md",
+    "rubric": "RUBRIC.md"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "ai-benchmark",
+  "version": "0.1.0",
+  "description": "A small, fun suite of benchmarks for evaluating AI coding models on real-world game-code modernization tasks.",
+  "type": "module",
+  "bin": {
+    "bench": "bin/bench.mjs"
+  },
+  "scripts": {
+    "bench": "node bin/bench.mjs",
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "vite preview"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@11.9.0",
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.3.0",
+    "@tanstack/react-router": "^1.170.16",
+    "@tanstack/react-start": "^1.168.26",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.22.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^26.0.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0"
+  }
+}

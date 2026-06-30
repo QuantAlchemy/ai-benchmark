@@ -1,0 +1,68 @@
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <title>Retro Cruiser!</title>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1, IE=9">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="HandheldFriendly" content="true" />
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="HandheldFriendly" content="true" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Phaser App">
+    <!-- <meta name="viewport" content="initial-scale=1 maximum-scale=1 user-scalable=0 minimal-ui" /> -->
+    <!-- <meta name="viewport" content="user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, width=device-width, height=device-height, target-densitydpi=device-dpi" /> -->
+
+    <!-- <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"> -->
+    <meta name="viewport" content="user-scalable=0, initial-scale=1, minimum-scale=1, maximum-scale=1, width=device-width, minimal-ui=1">
+
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="apple-touch-icon" sizes="57x57" href="assets/icons/app_icon_57x57.png">
+    <link rel="apple-touch-icon" sizes="60x60" href="assets/icons/app_icon_60x60.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="assets/icons/app_icon_72x72.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="assets/icons/app_icon_76x76.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="assets/icons/app_icon_114x114.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="assets/icons/app_icon_120x120.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="assets/icons/app_icon_144x144.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="assets/icons/app_icon_152x152.png">
+    <link rel="apple-touch-icon" sizes="256x256" href="assets/icons/app_icon_256x256.png">
+    <link rel="apple-touch-icon" sizes="512x512" href="assets/icons/app_icon_512x512.png">
+    <link rel="apple-touch-icon" sizes="1024x1024" href="assets/icons/app_icon_1024x1024.png">
+
+    <link rel="stylesheet" href="css/stylesheet.css" type="text/css" charset="utf-8" />
+
+    <!-- <script src='build/phaser.min.js'></script> -->
+
+    <!-- disable spacebar scrolling -->
+    <script>
+        window.onkeydown = function(e) {
+            return e.keyCode !== 32;
+        };
+    </script>
+
+    <!-- hack to preload font -->
+    <style>
+        @font-face {
+            font-family: 'retro2';
+            src: url('./assets/fonts/PressStart2P.ttf') format('truetype');
+        }
+    </style>
+
+  </head>
+  <body>
+    <!-- hack to preload font -->
+    <div style="font-family:'retro2'; display:none;"></div>
+
+    <div id='game'></div>
+    <div id='orientation'></div>
+
+    <!-- serve with `http-server -p 3000` -->
+    <script defer='defer' src='index.min.js'></script>
+  </body>
+</html>

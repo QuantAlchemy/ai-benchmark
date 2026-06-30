@@ -1,0 +1,76 @@
+@import "tailwindcss" source("../");
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.985 0.005 240);
+  --foreground: oklch(0.18 0.025 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.025 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.025 250);
+  --primary: oklch(0.35 0.09 225);
+  --primary-foreground: oklch(0.985 0.005 240);
+  --secondary: oklch(0.94 0.018 235);
+  --secondary-foreground: oklch(0.24 0.04 245);
+  --muted: oklch(0.94 0.012 245);
+  --muted-foreground: oklch(0.48 0.03 245);
+  --accent: oklch(0.92 0.042 172);
+  --accent-foreground: oklch(0.22 0.045 200);
+  --destructive: oklch(0.58 0.22 25);
+  --border: oklch(0.88 0.015 245);
+  --input: oklch(0.88 0.015 245);
+  --ring: oklch(0.62 0.1 205);
+}
+
+* {
+  @apply border-border;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-background text-foreground;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+input,
+textarea {
+  letter-spacing: 0;
+}
+
+pre,
+code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.tanstack/
+
+# OS / editor noise
+.DS_Store
+*.log

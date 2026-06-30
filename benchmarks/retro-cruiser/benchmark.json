@@ -1,0 +1,27 @@
+{
+  "id": "retro-cruiser",
+  "name": "Retro Cruiser — Rebuild a Lost Phaser Game",
+  "summary": "Recreate a Phaser 2.0.7 arcade shooter as a modern web game. The original source is lost; the model gets only the minified deployed bundle plus the original assets to reverse-engineer behavior from.",
+  "category": "JS / games / reverse-engineering",
+  "difficulty": "hard",
+  "source": {
+    "description": "The deployed build of 'Retro Cruiser' from the author's blog: an index.html, a single minified index.min.js (the game with Phaser 2.0.7 bundled in, ~720KB), a phaser.map source map, CSS, and the full original asset set (images, audio in multiple formats, fonts). No un-minified game source exists.",
+    "deployed_url": "https://ralphunlimited.com/blog/retro-cruiser/",
+    "repos": [
+      {
+        "name": "ralphunlimited",
+        "url": "https://github.com/ralphsmith80/ralphunlimited",
+        "commit": "7ddc89f44ec3fdb231bc187d273b33bc3fbc698b",
+        "subpath": "public/games/retro-cruiser"
+      }
+    ]
+  },
+  "scripts": {
+    "setup": "scripts/setup.sh",
+    "verify": "scripts/verify.sh"
+  },
+  "files": {
+    "task": "TASK.md",
+    "rubric": "RUBRIC.md"
+  }
+}
