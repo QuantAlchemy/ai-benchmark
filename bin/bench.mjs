@@ -175,16 +175,28 @@ const commands = {
     const b = requireId("run");
     const agent = flags.agent ? String(flags.agent) : "codex";
     const model = flags.model ? String(flags.model) : "";
+    const reasoningEffort = flags.reasoning ? String(flags.reasoning) : "";
+    const serviceTier = flags["service-tier"] ? String(flags["service-tier"]) : "";
+    const fastMode = Boolean(flags.fast);
     const solution = resolveSolution(b);
     heading(`Running ${agent}: ${b.id}`);
     info(`Solution: ${solution}`);
-    const result = await runAgentOnBenchmark(b, { agent, model, solution });
+    const result = await runAgentOnBenchmark(b, {
+      agent,
+      model,
+      reasoningEffort,
+      serviceTier,
+      fastMode,
+      solution,
+      versionSolution: !flags.solution,
+    });
     if (result.output) {
       console.log(result.output);
       console.log("");
     }
+    const actualSolution = result.solutionPath ?? solution;
     if (result.ok) {
-      ok(`${agent} finished. Next: pnpm bench verify ${b.id} --solution ${solution}`);
+      ok(`${agent} finished. Next: pnpm bench verify ${b.id} --solution ${actualSolution}`);
     } else {
       fail(`${agent} failed (exit ${result.exitCode}).`);
     }
@@ -234,7 +246,7 @@ const commands = {
       ["task <id>", "print TASK.md — the prompt to hand the model under test"],
       ["setup <id>", "fetch the pinned original source into source/"],
       ["agents", "list installed coding-agent CLIs"],
-      ["run <id> [--agent <name>] [--model <model>] [--solution <path>]", "ask an installed coding agent to write a solution"],
+      ["run <id> [--agent <name>] [--model <model>] [--reasoning <level>] [--service-tier <tier>] [--fast] [--solution <path>]", "ask an installed coding agent to write a solution"],
       ["verify <id> [--solution <path>]", "smoke-test a candidate solution (defaults to solutions/<id>/)"],
       ["rubric <id>", "print the manual scoring rubric"],
       ["score <id> [--model <name>] [--force]", "create a scorecard you fill in by hand"],

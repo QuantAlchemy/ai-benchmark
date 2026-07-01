@@ -18,6 +18,10 @@ declare module "*.mjs" {
     options?: {
       agent?: string;
       model?: string;
+      reasoningEffort?: string;
+      serviceTier?: string;
+      fastMode?: boolean;
+      versionSolution?: boolean;
       solution?: string;
     },
   ): Promise<{
@@ -26,5 +30,6 @@ declare module "*.mjs" {
     command: string;
     durationMs: number;
     output: string;
+    solutionPath?: string;
   }>;
 }
