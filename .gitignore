@@ -2,6 +2,16 @@ node_modules/
 dist/
 .tanstack/
 
+# Local runtime state
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+benchmarks/*/results/
+
+# Generated benchmark solutions
+solutions/*/
+
 # OS / editor noise
 .DS_Store
 *.log
