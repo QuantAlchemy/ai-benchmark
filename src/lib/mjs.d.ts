@@ -1,4 +1,12 @@
 declare module "*.mjs" {
+  export type AgentModelStatus = {
+    value: string;
+    label: string;
+    description?: string;
+    supportsServiceTier?: boolean;
+    supportsFastMode?: boolean;
+  };
+
   export type AgentStatus = {
     id: string;
     label: string;
@@ -8,6 +16,7 @@ declare module "*.mjs" {
     planned: boolean;
     configured: boolean;
     version: string;
+    models: AgentModelStatus[];
     docs: string;
     status: string;
   };

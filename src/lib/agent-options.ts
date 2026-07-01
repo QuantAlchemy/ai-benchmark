@@ -39,9 +39,14 @@ export const AGENT_MODEL_OPTIONS: Record<string, AgentModelOption[]> = {
   ],
   claude: [
     { value: "", label: "CLI default", description: "Use the local Claude Code default." },
+    { value: "fable", label: "Fable", description: "Claude Code Fable alias." },
+    { value: "claude-fable-5", label: "Claude Fable 5", description: "Current Fable model ID." },
     { value: "opus", label: "Opus", description: "Claude Code Opus alias." },
+    { value: "claude-opus-4-8", label: "Claude Opus 4.8", description: "Current Opus model ID." },
     { value: "sonnet", label: "Sonnet", description: "Claude Code Sonnet alias." },
+    { value: "claude-sonnet-5", label: "Claude Sonnet 5", description: "Current Sonnet model ID." },
     { value: "haiku", label: "Haiku", description: "Claude Code Haiku alias." },
+    { value: "claude-haiku-4-5", label: "Claude Haiku 4.5", description: "Current Haiku model ID." },
   ],
   cursor: [
     { value: "", label: "CLI default", description: "Use the local Cursor Agent default." },

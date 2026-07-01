@@ -386,7 +386,7 @@ function BenchmarkDashboard() {
 
   const running = activeRun !== null;
   const selectedAgent = agents.find((agent) => agent.id === agentId) ?? agents[0];
-  const agentModelOptions = getAgentModelOptions(agentId);
+  const agentModelOptions = selectedAgent?.models?.length ? selectedAgent.models : getAgentModelOptions(agentId);
   const selectedModelOption = agentModelOptions.find((option) => option.value === agentModel) ?? agentModelOptions[0];
   const reasoningOptions = getAgentReasoningOptions(agentId);
   const reasoningEnabled = supportsAgentReasoning(agentId);
