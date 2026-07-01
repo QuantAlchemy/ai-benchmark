@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { listAgents, runAgentOnBenchmark, type AgentStatus } from "../../lib/agents.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const BENCHMARKS_DIR = join(ROOT, "benchmarks");
@@ -62,6 +63,8 @@ export type CommandResult = {
   durationMs: number;
   output: string;
 };
+
+export type BenchmarkAgent = AgentStatus;
 
 function parseManifest(dir: string): BenchmarkManifest | null {
   const manifestPath = join(dir, "benchmark.json");
@@ -130,6 +133,10 @@ export function getDashboardData(): DashboardBenchmark[] {
       results: listResults(benchmark.dir),
     };
   });
+}
+
+export function getBenchmarkAgents(): BenchmarkAgent[] {
+  return listAgents();
 }
 
 export function getBenchmarkFiles(id: string) {
@@ -225,6 +232,16 @@ export async function runBenchmarkScript(id: string, scriptKey: "setup" | "verif
       });
     });
   });
+}
+
+export async function runBenchmarkAgent(
+  id: string,
+  agent: string,
+  model?: string,
+  solution?: string,
+): Promise<CommandResult> {
+  const benchmark = getManifest(id);
+  return runAgentOnBenchmark(benchmark, { agent, model, solution });
 }
 
 export function createScorecard(id: string, modelName: string, force: boolean): CommandResult & { path?: string } {
