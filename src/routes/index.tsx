@@ -620,6 +620,11 @@ function BenchmarkDashboard() {
                     <div className={cn("text-xs", result.ok ? "text-emerald-200/80" : "text-red-200/80")}>
                       Exit {result.exitCode} in {formatDuration(result.durationMs)}
                     </div>
+                    {!result.ok && result.output ? (
+                      <div className="mt-2 line-clamp-3 whitespace-pre-wrap text-xs text-red-100/90">
+                        {summarizeOutput(result.output)}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
@@ -1044,6 +1049,15 @@ function formatServiceTier(value: string) {
 function formatDuration(ms: number) {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function summarizeOutput(output: string) {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join("\n");
 }
 
 function formatDate(value: string) {
