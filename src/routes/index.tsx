@@ -11,6 +11,7 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  Rocket,
   Save,
   Terminal,
   Trash2,
@@ -32,11 +33,12 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  deleteBenchmarkRunAction,
   loadBenchmarkAgents,
   loadBenchmarkFiles,
   loadBenchmarkRuns,
+  loadBenchmarkSolutionEntries,
   loadDashboard,
+  removeSolutionEntryAction,
   runBenchmarkAgentAction,
   runBenchmarkAction,
   saveBenchmarkRunAction,
@@ -48,11 +50,25 @@ import {
   type ScorecardData,
 } from "@/lib/scorecard";
 import { cn } from "@/lib/utils";
-import type { BenchmarkAgent, BenchmarkRun, CommandResult, DashboardBenchmark } from "@/lib/benchmarks.server";
+import type {
+  BenchmarkAgent,
+  BenchmarkRun,
+  BenchmarkSolutionEntry,
+  CommandResult,
+  DashboardBenchmark,
+} from "@/lib/benchmarks.server";
 
 type BenchmarkFiles = Awaited<ReturnType<typeof loadBenchmarkFiles>>;
-type ActiveRun = "setup" | "verify" | "agent" | "refresh" | null;
+type BenchmarkAction = "setup" | "launch" | "verify";
+type ActiveRun = BenchmarkAction | "agent" | "refresh" | null;
 const DEFAULT_SCORECARD_MODEL = "rubric-v1";
+const RUN_LABELS: Record<Exclude<ActiveRun, null>, string> = {
+  setup: "Setup",
+  agent: "Run agent",
+  launch: "Launch",
+  verify: "Verify",
+  refresh: "Refresh",
+};
 
 export const Route = createFileRoute("/")({
   loader: async () => {
@@ -60,7 +76,8 @@ export const Route = createFileRoute("/")({
     const agents = await loadBenchmarkAgents();
     const initialFiles = benchmarks[0] ? await loadBenchmarkFiles({ data: { id: benchmarks[0].id } }) : null;
     const initialRuns = benchmarks[0] ? await loadBenchmarkRuns({ data: { id: benchmarks[0].id } }) : [];
-    return { benchmarks, agents, initialFiles, initialRuns };
+    const initialSolutionEntries = benchmarks[0] ? await loadBenchmarkSolutionEntries({ data: { id: benchmarks[0].id } }) : [];
+    return { benchmarks, agents, initialFiles, initialRuns, initialSolutionEntries };
   },
   component: BenchmarkDashboard,
 });
@@ -69,6 +86,7 @@ function BenchmarkDashboard() {
   const loaded = Route.useLoaderData();
   const loadedBenchmarks = loaded.benchmarks;
   const loadedAgents = loaded.agents;
+  const initialSolutionEntry = loaded.initialSolutionEntries[0] ?? null;
   const [benchmarks, setBenchmarks] = React.useState<DashboardBenchmark[]>(loadedBenchmarks);
   const [agents, setAgents] = React.useState<BenchmarkAgent[]>(loadedAgents);
   const [selectedId, setSelectedId] = React.useState(loadedBenchmarks[0]?.id ?? "");
@@ -79,12 +97,16 @@ function BenchmarkDashboard() {
   const [fastMode, setFastMode] = React.useState("standard");
   const [files, setFiles] = React.useState<BenchmarkFiles | null>(loaded.initialFiles);
   const [runHistory, setRunHistory] = React.useState<BenchmarkRun[]>(loaded.initialRuns);
-  const [selectedRunId, setSelectedRunId] = React.useState<number | null>(loaded.initialRuns[0]?.id ?? null);
-  const [scorecardData, setScorecardData] = React.useState<ScorecardData | null>(loaded.initialRuns[0]?.scorecardData ?? null);
-  const [runNotes, setRunNotes] = React.useState(loaded.initialRuns[0]?.notes ?? "");
+  const [solutionEntries, setSolutionEntries] = React.useState<BenchmarkSolutionEntry[]>(loaded.initialSolutionEntries);
+  const [selectedEntryKey, setSelectedEntryKey] = React.useState<string | null>(initialSolutionEntry?.key ?? null);
+  const [selectedRunId, setSelectedRunId] = React.useState<number | null>(initialSolutionEntry?.run?.id ?? null);
+  const [scorecardData, setScorecardData] = React.useState<ScorecardData | null>(initialSolutionEntry?.run?.scorecardData ?? null);
+  const [runNotes, setRunNotes] = React.useState(initialSolutionEntry?.run?.notes ?? "");
   const [savingScorecard, setSavingScorecard] = React.useState(false);
-  const [deletingScorecard, setDeletingScorecard] = React.useState(false);
+  const [removingEntryKey, setRemovingEntryKey] = React.useState<string | null>(null);
   const [activeRun, setActiveRun] = React.useState<ActiveRun>(null);
+  const [activeEntryKey, setActiveEntryKey] = React.useState<string | null>(null);
+  const [lastRunLabel, setLastRunLabel] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<CommandResult | null>(null);
   const [documentTab, setDocumentTab] = React.useState("task");
   const [historyTab, setHistoryTab] = React.useState("scorecard");
@@ -97,19 +119,31 @@ function BenchmarkDashboard() {
     if (!selectedBenchmark) return;
     if (files?.benchmark.id !== selectedBenchmark.id) setFiles(null);
     setResult(null);
+    setActiveEntryKey(null);
+    setRunHistory([]);
+    setSolutionEntries([]);
+    setSelectedEntryKey(null);
+    setSelectedRunId(null);
+    setScorecardData(null);
+    setRunNotes("");
+    setLastRunLabel(null);
     setCopied(null);
     let cancelled = false;
 
     Promise.all([
       loadBenchmarkFiles({ data: { id: selectedBenchmark.id } }),
       loadBenchmarkRuns({ data: { id: selectedBenchmark.id } }),
-    ]).then(([nextFiles, nextRuns]) => {
+      loadBenchmarkSolutionEntries({ data: { id: selectedBenchmark.id } }),
+    ]).then(([nextFiles, nextRuns, nextSolutionEntries]) => {
       if (!cancelled) setFiles(nextFiles);
       if (!cancelled) {
         setRunHistory(nextRuns);
-        setSelectedRunId(nextRuns[0]?.id ?? null);
-        setScorecardData(nextRuns[0]?.scorecardData ?? null);
-        setRunNotes(nextRuns[0]?.notes ?? "");
+        setSolutionEntries(nextSolutionEntries);
+        const nextSelectedEntry = nextSolutionEntries[0] ?? null;
+        setSelectedEntryKey(nextSelectedEntry?.key ?? null);
+        setSelectedRunId(nextSelectedEntry?.run?.id ?? null);
+        setScorecardData(nextSelectedEntry?.run?.scorecardData ?? null);
+        setRunNotes(nextSelectedEntry?.run?.notes ?? "");
       }
     });
 
@@ -126,7 +160,7 @@ function BenchmarkDashboard() {
   }, [agentId]);
 
   React.useEffect(() => {
-    const selectedRun = runHistory.find((run) => run.id === selectedRunId) ?? runHistory[0] ?? null;
+    const selectedRun = selectedRunId ? (runHistory.find((run) => run.id === selectedRunId) ?? null) : null;
     if (!selectedRun) {
       setSelectedRunId(null);
       setScorecardData(null);
@@ -138,6 +172,18 @@ function BenchmarkDashboard() {
     setRunNotes(selectedRun.notes);
   }, [selectedRunId, runHistory]);
 
+  React.useEffect(() => {
+    if (activeRun && activeRun !== "refresh") {
+      document.title = `Running ${RUN_LABELS[activeRun]} - ai-benchmark`;
+      return;
+    }
+    if (result) {
+      document.title = `${result.ok ? "Done" : "Failed"}: ${lastRunLabel ?? "Command"} - ai-benchmark`;
+      return;
+    }
+    document.title = "ai-benchmark";
+  }, [activeRun, lastRunLabel, result]);
+
   async function refreshDashboard() {
     setActiveRun("refresh");
     const [nextBenchmarks, nextAgents] = await Promise.all([loadDashboard(), loadBenchmarkAgents()]);
@@ -148,35 +194,51 @@ function BenchmarkDashboard() {
 
   async function refreshRunHistory() {
     if (!selectedBenchmark) return;
-    const nextRuns = await loadBenchmarkRuns({ data: { id: selectedBenchmark.id } });
+    const [nextRuns, nextSolutionEntries] = await Promise.all([
+      loadBenchmarkRuns({ data: { id: selectedBenchmark.id } }),
+      loadBenchmarkSolutionEntries({ data: { id: selectedBenchmark.id } }),
+    ]);
     setRunHistory(nextRuns);
+    setSolutionEntries(nextSolutionEntries);
   }
 
-  async function runAction(action: "setup" | "verify") {
+  async function runAction(
+    action: BenchmarkAction,
+    options: { solution?: string; runId?: number; entryKey?: string; label?: string } = {},
+  ) {
     if (!selectedBenchmark) return;
     setActiveRun(action);
+    setActiveEntryKey(options.entryKey ?? null);
+    if (options.entryKey) setSelectedEntryKey(options.entryKey);
+    setLastRunLabel(options.label ?? RUN_LABELS[action]);
     setResult(null);
+    if (options.runId) setSelectedRunId(options.runId);
     const selectedRun = runHistory.find((run) => run.id === selectedRunId) ?? runHistory[0] ?? null;
     const nextResult = await runBenchmarkAction({
       data: {
         id: selectedBenchmark.id,
         action,
-        solution: action === "verify" ? selectedRun?.solutionPath : undefined,
+        solution: options.solution ?? (action === "launch" || action === "verify" ? selectedRun?.solutionPath : undefined),
       },
     });
     setResult(nextResult);
     if (nextResult.run) {
+      setSelectedEntryKey(solutionEntryKey(selectedBenchmark.id, nextResult.run.solutionPath));
       setSelectedRunId(nextResult.run.id);
       setScorecardData(nextResult.run.scorecardData);
       setRunNotes(nextResult.run.notes);
       await refreshRunHistory();
     }
     await refreshDashboard();
+    await refreshRunHistory();
+    setActiveEntryKey(null);
   }
 
   async function runAgent() {
     if (!selectedBenchmark) return;
     setActiveRun("agent");
+    setActiveEntryKey(null);
+    setLastRunLabel(RUN_LABELS.agent);
     setResult(null);
     const nextResult = await runBenchmarkAgentAction({
       data: {
@@ -190,12 +252,15 @@ function BenchmarkDashboard() {
     });
     setResult(nextResult);
     if (nextResult.run) {
+      setSelectedEntryKey(solutionEntryKey(selectedBenchmark.id, nextResult.run.solutionPath));
       setSelectedRunId(nextResult.run.id);
       setScorecardData(nextResult.run.scorecardData);
       setRunNotes(nextResult.run.notes);
       await refreshRunHistory();
     }
     await refreshDashboard();
+    await refreshRunHistory();
+    setActiveEntryKey(null);
   }
 
   async function saveScorecard() {
@@ -218,14 +283,38 @@ function BenchmarkDashboard() {
     }
   }
 
-  async function deleteScorecard() {
-    if (!selectedRunId) return;
-    setDeletingScorecard(true);
-    const deletedRun = await deleteBenchmarkRunAction({ data: { id: selectedRunId } });
-    const nextRuns = runHistory.filter((run) => run.id !== deletedRun.id);
-    setRunHistory(nextRuns);
-    setSelectedRunId(nextRuns[0]?.id ?? null);
-    setDeletingScorecard(false);
+  async function removeSolutionEntry(entry: BenchmarkSolutionEntry) {
+    if (!selectedBenchmark) return;
+    const runMessage = "Remove this saved run record and generated scorecard markdown? The solution folder is left on disk.";
+    const folderMessage = entry.empty
+      ? "Remove this empty solution folder?"
+      : "This folder is not empty. Only empty folder-only entries can be removed here.";
+    if (!entry.run && !entry.empty) {
+      window.alert(folderMessage);
+      return;
+    }
+    if (!window.confirm(entry.run ? runMessage : folderMessage)) return;
+
+    setRemovingEntryKey(entry.key);
+    setLastRunLabel(entry.run ? `Remove ${solutionEntryTitle(entry)}` : "Remove empty solution folder");
+    setResult(null);
+    const nextResult = await removeSolutionEntryAction({
+      data: {
+        id: selectedBenchmark.id,
+        key: entry.key,
+        solutionPath: entry.solutionPath,
+      },
+    });
+    setResult(nextResult);
+    if (selectedEntryKey === entry.key) {
+      setSelectedEntryKey(null);
+      setSelectedRunId(null);
+      setScorecardData(null);
+      setRunNotes("");
+    }
+    await refreshRunHistory();
+    await refreshDashboard();
+    setRemovingEntryKey(null);
   }
 
   async function copyDocument(key: "task" | "rubric" | "readme" | "output" | "scorecard") {
@@ -304,7 +393,7 @@ function BenchmarkDashboard() {
   const fastModeEnabled = supportsAgentFastMode(agentId, selectedModelOption);
   const serviceTierValue =
     fastModeEnabled && fastMode === "fast" ? (agentId === "codex" ? "priority" : "fast") : "";
-  const selectedRun = runHistory.find((run) => run.id === selectedRunId) ?? runHistory[0] ?? null;
+  const selectedRun = selectedRunId ? (runHistory.find((run) => run.id === selectedRunId) ?? null) : null;
   const activeScorecardData = scorecardData ?? selectedRun?.scorecardData ?? null;
   const totalScore = activeScorecardData ? scorecardTotal(activeScorecardData) : 0;
   const maxScore = activeScorecardData ? scorecardMax(activeScorecardData) : 0;
@@ -318,8 +407,8 @@ function BenchmarkDashboard() {
     documentTab === "task" ? files?.task : documentTab === "rubric" ? files?.rubric : files?.readme;
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,oklch(0.96_0.04_178),transparent_34rem)]">
-      <header className="border-b bg-background/90 backdrop-blur">
+    <main className="min-h-screen overflow-x-hidden bg-background">
+      <header className="border-b bg-card/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -327,7 +416,7 @@ function BenchmarkDashboard() {
               <h1 className="text-xl font-semibold tracking-normal">ai-benchmark</h1>
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Setup, prompts, verification, rubrics, and scorecards for model benchmark runs.
+              Setup, agent execution, solution verification, rubrics, and scorecards for benchmark runs.
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={refreshDashboard} disabled={running}>
@@ -402,7 +491,7 @@ function BenchmarkDashboard() {
                     id="agent-select"
                     value={agentId}
                     onChange={(event) => setAgentId(event.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={running}
                   >
                     {agents.map((agent) => (
@@ -419,7 +508,7 @@ function BenchmarkDashboard() {
                     id="agent-model-name"
                     value={agentModel}
                     onChange={(event) => setAgentModel(event.target.value)}
-                    className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={running}
                   >
                     {agentModelOptions.map((option, index) => (
@@ -442,7 +531,7 @@ function BenchmarkDashboard() {
                         id="agent-reasoning-effort"
                         value={reasoningEffort}
                         onChange={(event) => setReasoningEffort(event.target.value)}
-                        className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={running}
                       >
                         {reasoningOptions.map((option) => (
@@ -460,7 +549,7 @@ function BenchmarkDashboard() {
                         id="agent-fast-mode"
                         value={fastMode}
                         onChange={(event) => setFastMode(event.target.value)}
-                        className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={running}
                       >
                         {FAST_MODE_OPTIONS.map((option) => (
@@ -487,19 +576,53 @@ function BenchmarkDashboard() {
               ) : null}
 
               <div className="flex flex-wrap gap-2">
-                <Button onClick={runAgent} disabled={running || !selectedAgent?.available}>
-                  {activeRun === "agent" ? <Loader2 className="size-4 animate-spin" /> : <Bot className="size-4" />}
-                  Run agent
-                </Button>
                 <Button onClick={() => runAction("setup")} disabled={running}>
                   {activeRun === "setup" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-                  Setup
+                  1 Setup
                 </Button>
-                <Button variant="secondary" onClick={() => runAction("verify")} disabled={running || !selectedRun}>
-                  {activeRun === "verify" ? <Loader2 className="size-4 animate-spin" /> : <FileCheck2 className="size-4" />}
-                  Verify
+                <Button onClick={runAgent} disabled={running || !selectedAgent?.available}>
+                  {activeRun === "agent" ? <Loader2 className="size-4 animate-spin" /> : <Bot className="size-4" />}
+                  2 Run agent
                 </Button>
               </div>
+              {activeRun && activeRun !== "refresh" ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-3 text-sm text-amber-100"
+                >
+                  <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" aria-hidden="true" />
+                  <div>
+                    <div className="font-semibold">{RUN_LABELS[activeRun]} is running</div>
+                    <div className="text-xs text-amber-200/80">The result will appear here when the command exits.</div>
+                  </div>
+                </div>
+              ) : result ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className={cn(
+                    "flex items-start gap-3 rounded-md border px-3 py-3 text-sm",
+                    result.ok
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
+                      : "border-red-500/40 bg-red-500/10 text-red-100",
+                  )}
+                >
+                  {result.ok ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  )}
+                  <div>
+                    <div className="font-semibold">
+                      {lastRunLabel ?? "Command"} {result.ok ? "finished" : "failed"}
+                    </div>
+                    <div className={cn("text-xs", result.ok ? "text-emerald-200/80" : "text-red-200/80")}>
+                      Exit {result.exitCode} in {formatDuration(result.durationMs)}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -524,7 +647,7 @@ function BenchmarkDashboard() {
                 </div>
               </CardHeader>
               <CardContent>
-                <pre className="min-h-44 max-h-80 max-w-full overflow-auto rounded-md border bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                <pre className="min-h-44 max-h-80 max-w-full overflow-auto rounded-md border bg-black p-4 text-xs leading-5 text-zinc-100">
                   {activeRun && activeRun !== "refresh"
                     ? `Running ${activeRun}...`
                     : result?.output || "Command output will appear here."}
@@ -536,32 +659,108 @@ function BenchmarkDashboard() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
                   <History className="size-4 text-primary" aria-hidden="true" />
-                  Scorecards
+                  Solutions
                 </CardTitle>
-                <CardDescription>{runHistory.length} saved for this benchmark</CardDescription>
+                <CardDescription>
+                  {solutionEntries.length} solution entr{solutionEntries.length === 1 ? "y" : "ies"} found for{" "}
+                  {selectedBenchmark.id}
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                {runHistory.length ? (
+                {solutionEntries.length ? (
                   <div className="space-y-3">
-                    {runHistory.slice(0, 6).map((run) => (
-                      <button
-                        key={run.id}
-                        type="button"
-                        onClick={() => setSelectedRunId(run.id)}
-                        className={cn(
-                          "w-full rounded-md border p-3 text-left transition-colors hover:border-primary/40",
-                          selectedRun?.id === run.id && "border-primary ring-2 ring-ring/25",
-                        )}
-                      >
-                        <div className="break-all text-xs font-medium">Run #{run.id}</div>
-                        <div className="mt-1 text-xs text-muted-foreground">{formatDate(run.createdAt)}</div>
-                        {run.notes ? <div className="mt-2 line-clamp-2 text-xs text-muted-foreground">{run.notes}</div> : null}
-                      </button>
-                    ))}
+                    {solutionEntries.slice(0, 8).map((entry) => {
+                      const entryTitle = solutionEntryTitle(entry);
+                      const launchRunning = activeRun === "launch" && activeEntryKey === entry.key;
+                      const verifyRunning = activeRun === "verify" && activeEntryKey === entry.key;
+                      const removing = removingEntryKey === entry.key;
+                      const selected = selectedEntryKey === entry.key;
+                      return (
+                        <div
+                          key={entry.key}
+                          className={cn(
+                            "rounded-md border p-3 transition-colors",
+                            selected && "border-primary ring-2 ring-ring/25",
+                            entry.empty && "border-amber-500/50 bg-amber-500/10",
+                          )}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedEntryKey(entry.key);
+                              setSelectedRunId(entry.run?.id ?? null);
+                              if (!entry.run) {
+                                setScorecardData(null);
+                                setRunNotes("");
+                              }
+                            }}
+                            className="block w-full text-left"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="break-all text-xs font-medium">{entryTitle}</div>
+                              <Badge variant="outline">{entry.benchmarkId}</Badge>
+                              {entry.empty ? <Badge variant="warning">empty folder</Badge> : null}
+                              {!entry.run ? <Badge variant="secondary">folder only</Badge> : null}
+                            </div>
+                            <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{entry.folderName}</div>
+                            <div className="mt-2 text-[11px] font-medium uppercase text-muted-foreground">Solution</div>
+                            <div className="mt-2 line-clamp-2 break-all font-mono text-[11px] leading-4 text-muted-foreground">
+                              {entry.solutionPath}
+                            </div>
+                            {entry.run?.notes ? <div className="mt-2 line-clamp-2 text-xs text-muted-foreground">{entry.run.notes}</div> : null}
+                          </button>
+                          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() =>
+                                  runAction("launch", {
+                                    runId: entry.run?.id,
+                                    entryKey: entry.key,
+                                    solution: entry.solutionPath,
+                                    label: `Launch ${entryTitle}`,
+                                  })
+                                }
+                                disabled={running || entry.empty}
+                              >
+                                {launchRunning ? <Loader2 className="size-4 animate-spin" /> : <Rocket className="size-4" />}
+                                Launch
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() =>
+                                  runAction("verify", {
+                                    runId: entry.run?.id,
+                                    entryKey: entry.key,
+                                    solution: entry.solutionPath,
+                                    label: `Verify ${entryTitle}`,
+                                  })
+                                }
+                                disabled={running || entry.empty}
+                              >
+                                {verifyRunning ? <Loader2 className="size-4 animate-spin" /> : <FileCheck2 className="size-4" />}
+                                Verify
+                              </Button>
+                            </div>
+                            <Button
+                              variant={entry.run ? "outline" : "destructive"}
+                              size="sm"
+                              onClick={() => void removeSolutionEntry(entry)}
+                              disabled={running || removing || (!entry.run && !entry.empty)}
+                            >
+                              {removing ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                              {entry.run ? "Remove record" : "Remove folder"}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                    Successful agent runs create scorecards automatically.
+                    Agent runs create solution folders here, even before a scorecard exists.
                   </div>
                 )}
               </CardContent>
@@ -577,8 +776,8 @@ function BenchmarkDashboard() {
                 </CardTitle>
                 <CardDescription>
                   {selectedRun
-                    ? `Run #${selectedRun.id} from ${formatDate(selectedRun.createdAt)}`
-                    : "Successful agent runs create scorecards automatically."}
+                    ? `For solution saved ${formatDate(selectedRun.createdAt)}`
+                    : "Select a saved run to view its scorecard."}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -589,17 +788,6 @@ function BenchmarkDashboard() {
                 <Button variant="outline" size="sm" onClick={saveScorecard} disabled={!selectedRun || savingScorecard || !scorecardIsDirty}>
                   {savingScorecard ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                   Save
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => {
-                    if (window.confirm("Delete this scorecard and its generated markdown file?")) void deleteScorecard();
-                  }}
-                  disabled={!selectedRun || deletingScorecard}
-                >
-                  {deletingScorecard ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                  Delete
                 </Button>
               </div>
             </CardHeader>
@@ -646,7 +834,7 @@ function BenchmarkDashboard() {
                 </div>
               ) : (
                 <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  Scorecards will appear here after a successful agent run.
+                  Select a saved run to view its scorecard.
                 </div>
               )}
             </CardContent>
@@ -761,7 +949,7 @@ function ScorecardForm({
                       const value = event.target.value;
                       onCriterionScore(criterion.id, value === "" ? null : Number(value));
                     }}
-                    className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   >
                     <option value="">-</option>
                     {[0, 1, 2, 3, 4, 5].map((score) => (
@@ -857,4 +1045,12 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function solutionEntryTitle(entry: BenchmarkSolutionEntry) {
+  return formatDate(entry.createdAt);
+}
+
+function solutionEntryKey(benchmarkId: string, solutionPath: string) {
+  return `solution:${benchmarkId}:${solutionPath}`;
 }
