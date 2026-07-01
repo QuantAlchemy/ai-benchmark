@@ -296,7 +296,7 @@ function BenchmarkDashboard() {
     if (!window.confirm(entry.run ? runMessage : folderMessage)) return;
 
     setRemovingEntryKey(entry.key);
-    setLastRunLabel(entry.run ? `Remove ${solutionEntryTitle(entry)}` : "Remove empty solution folder");
+    setLastRunLabel(`Remove ${solutionEntryTitle(entry)}`);
     setResult(null);
     const nextResult = await removeSolutionEntryAction({
       data: {
@@ -703,6 +703,11 @@ function BenchmarkDashboard() {
                               {!entry.run ? <Badge variant="secondary">folder only</Badge> : null}
                             </div>
                             <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{entry.folderName}</div>
+                            {entry.run?.runDurationMs ? (
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                Run time {formatDuration(entry.run.runDurationMs)}
+                              </div>
+                            ) : null}
                             <div className="mt-2 text-[11px] font-medium uppercase text-muted-foreground">Solution</div>
                             <div className="mt-2 line-clamp-2 break-all font-mono text-[11px] leading-4 text-muted-foreground">
                               {entry.solutionPath}
@@ -745,13 +750,13 @@ function BenchmarkDashboard() {
                               </Button>
                             </div>
                             <Button
-                              variant={entry.run ? "outline" : "destructive"}
+                              variant="outline"
                               size="sm"
                               onClick={() => void removeSolutionEntry(entry)}
                               disabled={running || removing || (!entry.run && !entry.empty)}
                             >
                               {removing ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                              {entry.run ? "Remove record" : "Remove folder"}
+                              Remove
                             </Button>
                           </div>
                         </div>
@@ -800,6 +805,7 @@ function BenchmarkDashboard() {
                     <ResultMeta label="Agent model" value={selectedRun.agentModel || "CLI default"} />
                     {selectedRun.reasoningEffort ? <ResultMeta label="Reasoning" value={formatReasoning(selectedRun.reasoningEffort)} /> : null}
                     {selectedRun.serviceTier ? <ResultMeta label="Service tier" value={formatServiceTier(selectedRun.serviceTier)} /> : null}
+                    {selectedRun.runDurationMs ? <ResultMeta label="Run time" value={formatDuration(selectedRun.runDurationMs)} /> : null}
                     <ResultMeta label="Solution" value={selectedRun.solutionPath} />
                     {selectedRun.scorecardPath ? <ResultMeta label="Scorecard" value={selectedRun.scorecardPath} /> : null}
                     <div className="rounded-md border bg-background p-3">

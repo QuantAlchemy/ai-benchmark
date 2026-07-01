@@ -500,6 +500,7 @@ export async function runBenchmarkAgent(
     agentModel: model,
     reasoningEffort,
     serviceTier,
+    runDurationMs: result.durationMs,
     solution: result.solutionPath ?? solution,
   });
   return {
@@ -690,6 +691,7 @@ export function createScorecard(
     agentModel?: string;
     reasoningEffort?: string;
     serviceTier?: string;
+    runDurationMs?: number | null;
     solution?: string;
     notes?: string;
   } = {},
@@ -715,6 +717,7 @@ function createScorecardRun(
     agentModel?: string;
     reasoningEffort?: string;
     serviceTier?: string;
+    runDurationMs?: number | null;
     solution?: string;
     notes?: string;
   } = {},
@@ -744,6 +747,7 @@ function createScorecardRun(
     agentModel: options.agentModel || null,
     reasoningEffort: options.reasoningEffort || null,
     serviceTier: options.serviceTier || null,
+    runDurationMs: options.runDurationMs ?? null,
     solutionPath,
     scoreModel: model,
     scorecardPath: out,
