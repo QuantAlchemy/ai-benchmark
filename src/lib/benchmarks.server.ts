@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   rmSync,
+  rmdirSync,
   readFileSync,
   readdirSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listAgents, runAgentOnBenchmark } from "../../lib/agents.mjs";
@@ -40,6 +44,7 @@ export type BenchmarkManifest = {
   scripts?: {
     setup?: string;
     verify?: string;
+    launch?: string;
   };
   files?: {
     task?: string;
@@ -69,6 +74,21 @@ export type CommandResult = {
   output: string;
   solutionPath?: string;
   run?: BenchmarkRun;
+};
+
+export type BenchmarkSolutionEntry = {
+  key: string;
+  benchmarkId: string;
+  benchmarkName: string;
+  label: string;
+  folderName: string;
+  solutionPath: string;
+  createdAt: string;
+  updatedAt: string;
+  empty: boolean;
+  source: "solution";
+  run?: BenchmarkRun;
+  runs: BenchmarkRun[];
 };
 
 export type BenchmarkAgent = ReturnType<typeof listAgents>[number];
@@ -242,6 +262,218 @@ export async function runBenchmarkScript(id: string, scriptKey: "setup" | "verif
   });
 }
 
+async function isPortAvailable(port: number) {
+  return new Promise<boolean>((resolvePromise) => {
+    const server = createServer();
+    server.once("error", () => resolvePromise(false));
+    server.once("listening", () => {
+      server.close(() => resolvePromise(true));
+    });
+    server.listen(port, "127.0.0.1");
+  });
+}
+
+async function chooseLaunchPort() {
+  for (const port of [5173, 4173, 3000, 8080, 8000, 4321]) {
+    if (await isPortAvailable(port)) return port;
+  }
+  for (let offset = 0; offset < 100; offset += 1) {
+    const port = 5200 + offset;
+    if (await isPortAvailable(port)) return port;
+  }
+  return 5173;
+}
+
+function resolveBenchmarkSolution(benchmark: Pick<BenchmarkManifest, "id">, solution?: string) {
+  const requestedSolution = solution?.trim();
+  const defaultSolution = defaultSolutionPath(benchmark);
+  const requestedPath = requestedSolution ? resolve(requestedSolution) : "";
+  return requestedPath === resolve(SOLUTIONS_DIR) ? resolve(defaultSolution) : resolve(requestedSolution || defaultSolution);
+}
+
+function detectPackageManager(solutionPath: string) {
+  if (existsSync(join(solutionPath, "package-lock.json"))) return "npm";
+  if (existsSync(join(solutionPath, "yarn.lock"))) return "yarn";
+  return "pnpm";
+}
+
+function readPackageJson(solutionPath: string) {
+  const packagePath = join(solutionPath, "package.json");
+  if (!existsSync(packagePath)) return null;
+  return JSON.parse(readFileSync(packagePath, "utf8")) as {
+    scripts?: Record<string, string>;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+}
+
+function hasLaunchEntrypoint(solutionPath: string) {
+  return existsSync(join(solutionPath, "package.json")) || existsSync(join(solutionPath, "run.sh"));
+}
+
+function resolveLaunchSolutionPath(solutionPath: string) {
+  if (!existsSync(solutionPath) || hasLaunchEntrypoint(solutionPath)) return solutionPath;
+  const launchableChildren = readdirSync(solutionPath)
+    .map((name) => join(solutionPath, name))
+    .filter((path) => statSync(path).isDirectory() && hasLaunchEntrypoint(path))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  return launchableChildren[0] ?? solutionPath;
+}
+
+function isViteProject(pkg: NonNullable<ReturnType<typeof readPackageJson>>, script: string) {
+  return (
+    /\bvite\b/.test(script) ||
+    Boolean(pkg.dependencies?.vite) ||
+    Boolean(pkg.devDependencies?.vite)
+  );
+}
+
+function renderCommand(command: string, args: string[]) {
+  return [command, ...args.map((arg) => (/\s/.test(arg) ? JSON.stringify(arg) : arg))].join(" ");
+}
+
+async function probeUrl(url: string) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(500) });
+    return response.ok || response.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+async function wait(ms: number) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+}
+
+export async function launchBenchmarkSolution(id: string, solution?: string): Promise<CommandResult> {
+  const benchmark = getManifest(id);
+  const solutionPath = resolveLaunchSolutionPath(resolveBenchmarkSolution(benchmark, solution));
+  if (!existsSync(solutionPath)) {
+    return {
+      ok: false,
+      exitCode: 2,
+      command: "launch",
+      durationMs: 0,
+      output: `Solution path does not exist: ${solutionPath}`,
+    };
+  }
+
+  const manifestLaunch = benchmark.scripts?.launch;
+  const packageJson = readPackageJson(solutionPath);
+  const runScriptPath = join(solutionPath, "run.sh");
+  const port = await chooseLaunchPort();
+  let command = "";
+  let args: string[] = [];
+  let cwd = solutionPath;
+  const url = packageJson ? `http://127.0.0.1:${port}/` : "";
+  const env = {
+    ...process.env,
+    BENCH_ID: benchmark.id,
+    BENCH_DIR: benchmark.dir,
+    BENCH_SOURCE: join(benchmark.dir, "source"),
+    BENCH_SOLUTION: solutionPath,
+    HOST: process.env.HOST ?? "127.0.0.1",
+    PORT: String(port),
+  };
+
+  if (manifestLaunch) {
+    const scriptPath = join(benchmark.dir, manifestLaunch);
+    if (!existsSync(scriptPath)) throw new Error(`Script not found: ${scriptPath}`);
+    command = "bash";
+    args = [scriptPath];
+    cwd = benchmark.dir;
+  } else if (packageJson) {
+    const scripts = packageJson.scripts ?? {};
+    const scriptName = ["dev", "preview", "start", "serve"].find((name) => Boolean(scripts[name]));
+    if (!scriptName) {
+      return {
+        ok: false,
+        exitCode: 2,
+        command: "launch",
+        durationMs: 0,
+        output: `No launch script found in ${join(solutionPath, "package.json")}.\nExpected one of: preview, start, serve, dev.`,
+      };
+    }
+    const packageManager = detectPackageManager(solutionPath);
+    command = packageManager;
+    args = ["run", scriptName];
+    if (isViteProject(packageJson, scripts[scriptName])) {
+      args.push("--", "--host", "127.0.0.1", "--port", String(port));
+    }
+  } else if (existsSync(runScriptPath)) {
+    command = "bash";
+    args = ["-lc", "./run.sh"];
+  } else {
+    return {
+      ok: false,
+      exitCode: 2,
+      command: "launch",
+      durationMs: 0,
+      output: `No launchable solution entry point found at ${solutionPath}.\nExpected package.json with preview/start/serve/dev, or executable run.sh.`,
+    };
+  }
+
+  const startedAt = Date.now();
+  const logsDir = join(ROOT, "data", "launch-logs");
+  mkdirSync(logsDir, { recursive: true });
+  const logPath = join(logsDir, `${benchmark.id}-${Date.now()}.log`);
+  const outFd = openSync(logPath, "a");
+  const errFd = openSync(logPath, "a");
+  const child = spawn(command, args, {
+    cwd,
+    env,
+    detached: true,
+    stdio: ["ignore", outFd, errFd],
+  });
+  closeSync(outFd);
+  closeSync(errFd);
+  child.unref();
+
+  let exitCode: number | null = null;
+  child.once("exit", (code) => {
+    exitCode = code ?? 1;
+  });
+
+  let responded = false;
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    await wait(500);
+    if (url && (await probeUrl(url))) {
+      responded = true;
+      break;
+    }
+    if (exitCode !== null) break;
+  }
+
+  const log = existsSync(logPath) ? readFileSync(logPath, "utf8").trimEnd() : "";
+  const displayCommand = renderCommand(command, args);
+  if (exitCode !== null) {
+    return {
+      ok: false,
+      exitCode,
+      command: displayCommand,
+      durationMs: Date.now() - startedAt,
+      output: [`Launch command exited early with code ${exitCode}.`, `Log: ${logPath}`, log].filter(Boolean).join("\n\n"),
+    };
+  }
+
+  return {
+    ok: true,
+    exitCode: 0,
+    command: `${displayCommand} (pid ${child.pid})`,
+    durationMs: Date.now() - startedAt,
+    output: [
+      `Started solution from: ${solutionPath}`,
+      url ? (responded ? `URL: ${url}` : `URL candidate: ${url} (no HTTP response confirmed yet)`) : "",
+      `PID: ${child.pid}`,
+      `Log: ${logPath}`,
+      log ? `\nRecent output:\n${log}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    solutionPath,
+  };
+}
+
 export async function runBenchmarkAgent(
   id: string,
   agent: string,
@@ -280,6 +512,142 @@ export async function runBenchmarkAgent(
 export function getBenchmarkRuns(id: string): BenchmarkRun[] {
   const benchmark = getManifest(id);
   return listBenchmarkRuns(benchmark.id);
+}
+
+function isDirectoryEmpty(path: string): boolean {
+  if (!existsSync(path) || !statSync(path).isDirectory()) return false;
+  return readdirSync(path).length === 0;
+}
+
+function upsertSolutionEntry(
+  entries: Map<string, BenchmarkSolutionEntry>,
+  benchmark: BenchmarkManifest,
+  solutionPath: string,
+  run?: BenchmarkRun,
+) {
+  const resolved = resolve(solutionPath);
+  const stats = existsSync(resolved) ? statSync(resolved) : null;
+  const folderName = resolved.split("/").pop() || benchmark.id;
+  const existing = entries.get(resolved);
+  if (existing) {
+    if (run) {
+      existing.runs.push(run);
+      if (!existing.run || run.createdAt.localeCompare(existing.run.createdAt) > 0) existing.run = run;
+    }
+    existing.updatedAt = stats?.mtime.toISOString() ?? run?.updatedAt ?? existing.updatedAt;
+    existing.empty = stats?.isDirectory() ? isDirectoryEmpty(resolved) : existing.empty;
+    return;
+  }
+  entries.set(resolved, {
+    key: `solution:${benchmark.id}:${resolved}`,
+    benchmarkId: benchmark.id,
+    benchmarkName: benchmark.name,
+    label: stats ? stats.birthtime.toISOString() : (run?.createdAt ?? new Date(0).toISOString()),
+    folderName,
+    solutionPath: resolved,
+    createdAt: stats ? stats.birthtime.toISOString() : (run?.createdAt ?? new Date(0).toISOString()),
+    updatedAt: stats?.mtime.toISOString() ?? run?.updatedAt ?? run?.createdAt ?? new Date(0).toISOString(),
+    empty: stats?.isDirectory() ? isDirectoryEmpty(resolved) : false,
+    source: "solution",
+    run,
+    runs: run ? [run] : [],
+  });
+}
+
+function getSolutionEntries(benchmarks: BenchmarkManifest[]): BenchmarkSolutionEntry[] {
+  const entries = new Map<string, BenchmarkSolutionEntry>();
+
+  for (const benchmark of benchmarks) {
+    for (const run of listBenchmarkRuns(benchmark.id)) {
+      upsertSolutionEntry(entries, benchmark, run.solutionPath, run);
+    }
+
+    const solutionRoot = defaultSolutionPath(benchmark);
+    if (existsSync(solutionRoot)) {
+      for (const name of readdirSync(solutionRoot)) {
+        const path = join(solutionRoot, name);
+        const stats = statSync(path);
+        if (!stats.isDirectory()) continue;
+        upsertSolutionEntry(entries, benchmark, path);
+      }
+    }
+  }
+
+  return [...entries.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getBenchmarkSolutionEntries(id: string): BenchmarkSolutionEntry[] {
+  return getSolutionEntries([getManifest(id)]);
+}
+
+export function getAllSolutionEntries(): BenchmarkSolutionEntry[] {
+  return getSolutionEntries(listManifests());
+}
+
+export function removeSolutionEntry(input: { id: string; key: string; solutionPath: string }): CommandResult {
+  const benchmark = getManifest(input.id);
+  const startedAt = Date.now();
+  const solutionRoot = resolve(defaultSolutionPath(benchmark));
+  const solutionPath = resolve(input.solutionPath);
+  if (solutionPath !== solutionRoot && !solutionPath.startsWith(`${solutionRoot}/`)) {
+    return {
+      ok: false,
+      exitCode: 2,
+      command: "remove solution entry",
+      durationMs: Date.now() - startedAt,
+      output: `Refusing to remove path outside ${solutionRoot}: ${solutionPath}`,
+    };
+  }
+
+  const entry = getBenchmarkSolutionEntries(benchmark.id).find((solution) => solution.key === input.key);
+  if (entry?.run) {
+    const runId = entry.run.id;
+    const removed = removeBenchmarkRun(runId);
+    return {
+      ok: true,
+      exitCode: 0,
+      command: `remove run record ${runId}`,
+      durationMs: Date.now() - startedAt,
+      output: `Removed run record #${runId} and generated scorecard markdown if present.\nSolution folder left on disk: ${removed.solutionPath}`,
+      solutionPath: removed.solutionPath,
+    };
+  }
+
+  if (!existsSync(solutionPath)) {
+    return {
+      ok: true,
+      exitCode: 0,
+      command: `remove empty folder ${solutionPath}`,
+      durationMs: Date.now() - startedAt,
+      output: `Folder already removed: ${solutionPath}`,
+    };
+  }
+  if (!statSync(solutionPath).isDirectory()) {
+    return {
+      ok: false,
+      exitCode: 2,
+      command: `remove empty folder ${solutionPath}`,
+      durationMs: Date.now() - startedAt,
+      output: `Not a directory: ${solutionPath}`,
+    };
+  }
+  if (!isDirectoryEmpty(solutionPath)) {
+    return {
+      ok: false,
+      exitCode: 2,
+      command: `remove empty folder ${solutionPath}`,
+      durationMs: Date.now() - startedAt,
+      output: `Folder is not empty, so it was not removed: ${solutionPath}`,
+    };
+  }
+  rmdirSync(solutionPath);
+  return {
+    ok: true,
+    exitCode: 0,
+    command: `remove empty folder ${solutionPath}`,
+    durationMs: Date.now() - startedAt,
+    output: `Removed empty solution folder:\n${solutionPath}`,
+  };
 }
 
 export function saveBenchmarkRun(data: {

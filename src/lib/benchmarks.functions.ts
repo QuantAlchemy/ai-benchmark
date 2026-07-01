@@ -1,11 +1,14 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
   createScorecard,
+  getAllSolutionEntries,
   getBenchmarkAgents,
   getBenchmarkFiles,
   getBenchmarkRuns,
+  getBenchmarkSolutionEntries,
   getDashboardData,
-  removeBenchmarkRun,
+  launchBenchmarkSolution,
+  removeSolutionEntry,
   runBenchmarkAgent,
   runBenchmarkScript,
   saveBenchmarkRun,
@@ -27,8 +30,9 @@ export const loadBenchmarkFiles = createServerFn({ method: "GET" })
   });
 
 export const runBenchmarkAction = createServerFn({ method: "POST" })
-  .validator((data: { id: string; action: "setup" | "verify"; solution?: string }) => data)
+  .validator((data: { id: string; action: "setup" | "launch" | "verify"; solution?: string }) => data)
   .handler(({ data }) => {
+    if (data.action === "launch") return launchBenchmarkSolution(data.id, data.solution);
     return runBenchmarkScript(data.id, data.action, data.solution);
   });
 
@@ -88,6 +92,18 @@ export const loadBenchmarkRuns = createServerFn({ method: "GET" })
     return getBenchmarkRuns(data.id);
   });
 
+export const loadBenchmarkSolutionEntries = createServerFn({ method: "GET" })
+  .validator((data: { id?: string } | undefined) => data ?? {})
+  .handler(({ data }) => {
+    return data.id ? getBenchmarkSolutionEntries(data.id) : getAllSolutionEntries();
+  });
+
+export const removeSolutionEntryAction = createServerFn({ method: "POST" })
+  .validator((data: { id: string; key: string; solutionPath: string }) => data)
+  .handler(({ data }) => {
+    return removeSolutionEntry(data);
+  });
+
 export const saveBenchmarkRunAction = createServerFn({ method: "POST" })
   .validator((data: { id: number; scoreModel: string; scorecardData: unknown; notes: string }) => data)
   .handler(({ data }) => {
@@ -97,10 +113,4 @@ export const saveBenchmarkRunAction = createServerFn({ method: "POST" })
       scorecardData: data.scorecardData as ScorecardData,
       notes: data.notes,
     });
-  });
-
-export const deleteBenchmarkRunAction = createServerFn({ method: "POST" })
-  .validator((data: { id: number }) => data)
-  .handler(({ data }) => {
-    return removeBenchmarkRun(data.id);
   });
