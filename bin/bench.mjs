@@ -5,6 +5,7 @@ import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 
 import { join, resolve } from "node:path";
 import { listBenchmarks, getBenchmark } from "../lib/discover.mjs";
 import { defaultSolutionPath, SOLUTIONS_DIR } from "../lib/paths.mjs";
+import { agentUsage, listAgents, runAgentOnBenchmark } from "../lib/agents.mjs";
 import { runScript } from "../lib/runner.mjs";
 import { bold, dim, cyan, green, yellow, heading, ok, warn, fail, info } from "../lib/ui.mjs";
 
@@ -124,6 +125,17 @@ const commands = {
     printFile(requireId("rubric"), "rubric");
   },
 
+  agents() {
+    heading("Available agents");
+    for (const agent of listAgents()) {
+      const state = agent.available ? green("ready") : agent.planned ? yellow("planned") : yellow("missing");
+      console.log(`  ${bold(agent.id.padEnd(10))} ${state}  ${agent.label}`);
+      console.log(`    ${dim(agent.status)}`);
+      if (agent.version) console.log(`    ${dim(agent.version)}`);
+    }
+    console.log(dim("\nUse one with: pnpm bench run <id> --agent <agent> [--model <model>]"));
+  },
+
   async setup() {
     const b = requireId("setup");
     heading(`Setting up: ${b.id}`);
@@ -157,6 +169,26 @@ const commands = {
     if (code === 0) ok("Smoke check passed — now score by hand: bench score " + b.id);
     else fail(`Smoke check failed (exit ${code}). See output above.`);
     process.exit(code);
+  },
+
+  async run() {
+    const b = requireId("run");
+    const agent = flags.agent ? String(flags.agent) : "codex";
+    const model = flags.model ? String(flags.model) : "";
+    const solution = resolveSolution(b);
+    heading(`Running ${agent}: ${b.id}`);
+    info(`Solution: ${solution}`);
+    const result = await runAgentOnBenchmark(b, { agent, model, solution });
+    if (result.output) {
+      console.log(result.output);
+      console.log("");
+    }
+    if (result.ok) {
+      ok(`${agent} finished. Next: pnpm bench verify ${b.id} --solution ${solution}`);
+    } else {
+      fail(`${agent} failed (exit ${result.exitCode}).`);
+    }
+    process.exit(result.exitCode);
   },
 
   score() {
@@ -201,6 +233,8 @@ const commands = {
       ["info <id>", "show benchmark details and setup status"],
       ["task <id>", "print TASK.md — the prompt to hand the model under test"],
       ["setup <id>", "fetch the pinned original source into source/"],
+      ["agents", "list installed coding-agent CLIs"],
+      ["run <id> [--agent <name>] [--model <model>] [--solution <path>]", "ask an installed coding agent to write a solution"],
       ["verify <id> [--solution <path>]", "smoke-test a candidate solution (defaults to solutions/<id>/)"],
       ["rubric <id>", "print the manual scoring rubric"],
       ["score <id> [--model <name>] [--force]", "create a scorecard you fill in by hand"],
@@ -208,7 +242,8 @@ const commands = {
     ];
     for (const [cmd, desc] of rows) console.log(`  ${green(cmd.padEnd(38))} ${desc}`);
     console.log(dim(`\nDefault solution root: ${SOLUTIONS_DIR}`));
-    console.log(dim("\nTypical flow: setup → task → (model writes solution) → verify → score"));
+    console.log(dim("\nTypical flow: setup → run → verify → score"));
+    console.log(dim("\nAgent ids:\n" + agentUsage()));
   },
 };
 

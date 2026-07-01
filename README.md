@@ -8,6 +8,7 @@ This repo is a **harness**, not a set of solutions. It gives you, for each bench
 
 - the **original source** (fetched, pinned to an exact commit — same input every run),
 - a **task prompt** (`TASK.md`) to hand the model under test,
+- an **agent runner** (`bench run`) for installed coding-agent CLIs,
 - a **smoke test** (`bench verify`) that checks the candidate builds/runs,
 - a **scoring rubric** (`RUBRIC.md`) you fill in by hand.
 
@@ -24,6 +25,8 @@ Each benchmark is fully self-contained in its own folder, so they run independen
 
 - **Node.js ≥ 20** and **pnpm** (to run the harness CLI).
 - **git** (the harness fetches pinned original source).
+- Optional coding agents for `bench run`: **Codex**, **Claude Code**, or
+  **Cursor Agent** installed and authenticated on your machine.
 - Per-benchmark build tools are documented in each benchmark's `README.md`; the
   whole point of `asteroid-engine` is that the *solution* should need nothing else.
 
@@ -34,8 +37,8 @@ pnpm install            # no runtime deps; sets up the `bench` CLI
 
 pnpm bench list                       # see what's available
 pnpm bench setup asteroid-engine      # fetch the pinned original source
-pnpm bench task  asteroid-engine      # print the prompt to hand the model
-# … the model writes its port into solutions/asteroid-engine/ …
+pnpm bench agents                     # see which local agent CLIs are ready
+pnpm bench run asteroid-engine --agent codex
 pnpm bench verify asteroid-engine     # smoke-test: does it build & run?
 pnpm bench score  asteroid-engine --model claude-opus-4-8   # create a scorecard to fill in
 ```
@@ -45,12 +48,14 @@ pnpm bench score  asteroid-engine --model claude-opus-4-8   # create a scorecard
 ## The evaluation loop
 
 ```
-setup  →  task  →  (model writes solutions/<id>/)  →  verify  →  score
+setup  →  run  →  verify  →  score
 ```
 
 1. **`setup`** materializes the original code under `benchmarks/<id>/source/`.
-2. **`task`** prints `TASK.md` — copy it verbatim to the model so every run is identical.
-3. The model writes its solution into `solutions/<id>/` (or anywhere; point `verify`
+2. **`run`** launches an installed local coding agent and gives it the benchmark task.
+   Supported agent ids are `codex`, `claude`, and `cursor`; `agent` and
+   `cursor-agent` are aliases for `cursor`.
+3. The agent writes its solution into `solutions/<id>/` (or anywhere; point `verify`
    at it with `--solution <path>`). Passing `--solution solutions` is treated as the
    aggregate root and resolves to `solutions/<id>/`.
 4. **`verify`** runs the benchmark's build/run smoke check — an objective pass/fail gate.
@@ -61,6 +66,27 @@ setup  →  task  →  (model writes solutions/<id>/)  →  verify  →  score
 The repo keeps benchmark inputs, candidate outputs, and scorecards visible so historical
 runs can be reviewed side by side as new models are tested. Large dependency folders and
 build caches remain ignored.
+
+You can still use **`task`** to print `TASK.md` for a manual model run.
+
+## Agent runners
+
+`bench run` uses the CLI tools you already have installed:
+
+```bash
+pnpm bench run retro-cruiser --agent codex
+pnpm bench run retro-cruiser --agent claude --model opus
+pnpm bench run retro-cruiser --agent cursor --model gpt-5
+```
+
+The web dashboard exposes the same runner through the agent selector. The runner creates
+the solution directory if needed, passes `BENCH_ID`, `BENCH_DIR`, `BENCH_SOURCE`, and
+`BENCH_SOLUTION` to the child process, and asks the agent to keep changes scoped to the
+solution directory.
+
+`openrouter` is reserved as a future model source. For now, `bench agents` will show it as
+planned; API-backed runs need a coding-agent runtime with filesystem tools before they can
+produce benchmark solutions directly.
 
 ## Adding a benchmark
 

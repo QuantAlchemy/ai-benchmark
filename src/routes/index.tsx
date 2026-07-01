@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
+  Bot,
   CheckCircle2,
   Clipboard,
   FileCheck2,
@@ -22,21 +23,24 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   createBenchmarkScorecard,
+  loadBenchmarkAgents,
   loadBenchmarkFiles,
   loadDashboard,
+  runBenchmarkAgentAction,
   runBenchmarkAction,
 } from "@/lib/benchmarks.functions";
 import { cn } from "@/lib/utils";
-import type { CommandResult, DashboardBenchmark } from "@/lib/benchmarks.server";
+import type { BenchmarkAgent, CommandResult, DashboardBenchmark } from "@/lib/benchmarks.server";
 
 type BenchmarkFiles = Awaited<ReturnType<typeof loadBenchmarkFiles>>;
-type ActiveRun = "setup" | "verify" | "score" | "refresh" | null;
+type ActiveRun = "setup" | "verify" | "agent" | "score" | "refresh" | null;
 
 export const Route = createFileRoute("/")({
   loader: async () => {
     const benchmarks = await loadDashboard();
+    const agents = await loadBenchmarkAgents();
     const initialFiles = benchmarks[0] ? await loadBenchmarkFiles({ data: { id: benchmarks[0].id } }) : null;
-    return { benchmarks, initialFiles };
+    return { benchmarks, agents, initialFiles };
   },
   component: BenchmarkDashboard,
 });
@@ -44,11 +48,15 @@ export const Route = createFileRoute("/")({
 function BenchmarkDashboard() {
   const loaded = Route.useLoaderData();
   const loadedBenchmarks = loaded.benchmarks;
+  const loadedAgents = loaded.agents;
   const [benchmarks, setBenchmarks] = React.useState<DashboardBenchmark[]>(loadedBenchmarks);
+  const [agents, setAgents] = React.useState<BenchmarkAgent[]>(loadedAgents);
   const [selectedId, setSelectedId] = React.useState(loadedBenchmarks[0]?.id ?? "");
   const selectedBenchmark = benchmarks.find((benchmark) => benchmark.id === selectedId) ?? benchmarks[0];
   const [solutionPath, setSolutionPath] = React.useState(selectedBenchmark?.defaultSolution ?? "");
-  const [model, setModel] = React.useState("candidate");
+  const [scoreModel, setScoreModel] = React.useState("candidate");
+  const [agentId, setAgentId] = React.useState(loadedAgents.find((agent) => agent.available)?.id ?? loadedAgents[0]?.id ?? "codex");
+  const [agentModel, setAgentModel] = React.useState("");
   const [forceScorecard, setForceScorecard] = React.useState(false);
   const [files, setFiles] = React.useState<BenchmarkFiles | null>(loaded.initialFiles);
   const [activeRun, setActiveRun] = React.useState<ActiveRun>(null);
@@ -57,6 +65,7 @@ function BenchmarkDashboard() {
   const [copied, setCopied] = React.useState<string | null>(null);
 
   React.useEffect(() => setBenchmarks(loadedBenchmarks), [loadedBenchmarks]);
+  React.useEffect(() => setAgents(loadedAgents), [loadedAgents]);
 
   React.useEffect(() => {
     if (!selectedBenchmark) return;
@@ -76,8 +85,9 @@ function BenchmarkDashboard() {
 
   async function refreshDashboard() {
     setActiveRun("refresh");
-    const nextBenchmarks = await loadDashboard();
+    const [nextBenchmarks, nextAgents] = await Promise.all([loadDashboard(), loadBenchmarkAgents()]);
     setBenchmarks(nextBenchmarks);
+    setAgents(nextAgents);
     setActiveRun(null);
   }
 
@@ -96,6 +106,22 @@ function BenchmarkDashboard() {
     await refreshDashboard();
   }
 
+  async function runAgent() {
+    if (!selectedBenchmark) return;
+    setActiveRun("agent");
+    setResult(null);
+    const nextResult = await runBenchmarkAgentAction({
+      data: {
+        id: selectedBenchmark.id,
+        agent: agentId,
+        model: agentModel,
+        solution: solutionPath,
+      },
+    });
+    setResult(nextResult);
+    await refreshDashboard();
+  }
+
   async function createScore() {
     if (!selectedBenchmark) return;
     setActiveRun("score");
@@ -103,7 +129,7 @@ function BenchmarkDashboard() {
     const nextResult = await createBenchmarkScorecard({
       data: {
         id: selectedBenchmark.id,
-        model,
+        model: scoreModel,
         force: forceScorecard,
       },
     });
@@ -140,6 +166,7 @@ function BenchmarkDashboard() {
   }
 
   const running = activeRun !== null;
+  const selectedAgent = agents.find((agent) => agent.id === agentId) ?? agents[0];
   const documentText =
     documentTab === "task" ? files?.task : documentTab === "rubric" ? files?.rubric : files?.readme;
 
@@ -230,13 +257,51 @@ function BenchmarkDashboard() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="model-name">Model</Label>
-                  <Input id="model-name" value={model} onChange={(event) => setModel(event.target.value)} />
+                  <Label htmlFor="score-model-name">Scorecard model</Label>
+                  <Input id="score-model-name" value={scoreModel} onChange={(event) => setScoreModel(event.target.value)} />
                 </div>
               </div>
 
+              <div className="grid gap-3 lg:grid-cols-[16rem_1fr]">
+                <div className="space-y-2">
+                  <Label htmlFor="agent-select">Agent</Label>
+                  <select
+                    id="agent-select"
+                    value={agentId}
+                    onChange={(event) => setAgentId(event.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={running}
+                  >
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id} disabled={!agent.available}>
+                        {agent.label}
+                        {agent.available ? "" : agent.planned ? " (planned)" : " (missing)"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="agent-model-name">Agent model override</Label>
+                  <Input
+                    id="agent-model-name"
+                    value={agentModel}
+                    onChange={(event) => setAgentModel(event.target.value)}
+                    placeholder="Use CLI default"
+                  />
+                </div>
+              </div>
+              {selectedAgent ? (
+                <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                  {selectedAgent.version || selectedAgent.status}
+                </div>
+              ) : null}
+
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex flex-wrap gap-2">
+                  <Button onClick={runAgent} disabled={running || !selectedAgent?.available}>
+                    {activeRun === "agent" ? <Loader2 className="size-4 animate-spin" /> : <Bot className="size-4" />}
+                    Run agent
+                  </Button>
                   <Button onClick={() => runAction("setup")} disabled={running}>
                     {activeRun === "setup" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
                     Setup
