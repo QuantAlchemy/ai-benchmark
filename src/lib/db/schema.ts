@@ -10,6 +10,7 @@ export const benchmarkRuns = sqliteTable("benchmark_runs", {
   agentModel: text("agent_model"),
   reasoningEffort: text("reasoning_effort"),
   serviceTier: text("service_tier"),
+  runDurationMs: integer("run_duration_ms"),
   solutionPath: text("solution_path").notNull(),
   scoreModel: text("score_model").notNull(),
   scorecardPath: text("scorecard_path"),

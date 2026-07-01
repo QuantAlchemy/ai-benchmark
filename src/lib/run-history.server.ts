@@ -19,6 +19,7 @@ type BenchmarkRunRow = {
   agent_model: string | null;
   reasoning_effort: string | null;
   service_tier: string | null;
+  run_duration_ms: number | null;
   solution_path: string;
   score_model: string;
   scorecard_path: string | null;
@@ -37,6 +38,7 @@ type CreateBenchmarkRunInput = {
   agentModel?: string | null;
   reasoningEffort?: string | null;
   serviceTier?: string | null;
+  runDurationMs?: number | null;
   solutionPath: string;
   scoreModel: string;
   scorecardPath?: string | null;
@@ -88,6 +90,7 @@ function getDb() {
       agent_model TEXT,
       reasoning_effort TEXT,
       service_tier TEXT,
+      run_duration_ms INTEGER,
       solution_path TEXT NOT NULL,
       score_model TEXT NOT NULL,
       scorecard_path TEXT,
@@ -112,6 +115,11 @@ function getDb() {
   if (!hasScorecardData) {
     db.exec("ALTER TABLE benchmark_runs ADD COLUMN scorecard_data TEXT NOT NULL DEFAULT '{}'");
   }
+  const latestColumns = db.prepare("PRAGMA table_info(benchmark_runs)").all() as Array<{ name: string }>;
+  const hasRunDurationMs = latestColumns.some((column) => column.name === "run_duration_ms");
+  if (!hasRunDurationMs) {
+    db.exec("ALTER TABLE benchmark_runs ADD COLUMN run_duration_ms INTEGER");
+  }
   db.exec("UPDATE benchmark_runs SET scorecard_content = rubric_snapshot WHERE scorecard_content = ''");
   const rowsNeedingData = db
     .prepare("SELECT id, scorecard_content, rubric_snapshot FROM benchmark_runs WHERE scorecard_data = '{}' OR scorecard_data = ''")
@@ -133,6 +141,7 @@ function normalizeRun(row: BenchmarkRunRow): BenchmarkRun {
     agentModel: row.agent_model,
     reasoningEffort: row.reasoning_effort,
     serviceTier: row.service_tier,
+    runDurationMs: row.run_duration_ms,
     solutionPath: row.solution_path,
     scoreModel: row.score_model,
     scorecardPath: row.scorecard_path,
@@ -168,6 +177,7 @@ export function createBenchmarkRun(input: CreateBenchmarkRunInput): BenchmarkRun
         agent_model,
         reasoning_effort,
         service_tier,
+        run_duration_ms,
         solution_path,
         score_model,
         scorecard_path,
@@ -178,7 +188,7 @@ export function createBenchmarkRun(input: CreateBenchmarkRunInput): BenchmarkRun
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
     `,
     )
@@ -189,6 +199,7 @@ export function createBenchmarkRun(input: CreateBenchmarkRunInput): BenchmarkRun
       input.agentModel || null,
       input.reasoningEffort || null,
       input.serviceTier || null,
+      input.runDurationMs ?? null,
       input.solutionPath,
       input.scoreModel,
       input.scorecardPath || null,
