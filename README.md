@@ -23,7 +23,7 @@ Each benchmark is fully self-contained in its own folder, so they run independen
 
 ## Requirements
 
-- **Node.js ≥ 20** and **pnpm** (to run the harness CLI).
+- **Node.js ≥ 24** and **pnpm** (to run the harness CLI and local SQLite history).
 - **git** (the harness fetches pinned original source).
 - Optional coding agents for `bench run`: **Codex**, **Claude Code**, or
   **Cursor Agent** installed and authenticated on your machine.
@@ -60,8 +60,9 @@ setup  →  run  →  verify  →  score
    aggregate root and resolves to `solutions/<id>/`.
 4. **`verify`** runs the benchmark's build/run smoke check — an objective pass/fail gate.
    It is *not* the final grade; it just confirms the thing works.
-5. **`score`** copies the rubric into `benchmarks/<id>/results/` as a dated scorecard you
-   fill in by hand. That subjective score is the real result.
+5. A successful dashboard **`run`** creates a persisted scorecard automatically. The CLI
+   **`score`** command can still create a manual scorecard when needed.
+   Scorecards are editable and deletable with their notes and generated markdown.
 
 The repo keeps benchmark inputs, candidate outputs, and scorecards visible so historical
 runs can be reviewed side by side as new models are tested. Large dependency folders and
@@ -77,12 +78,19 @@ You can still use **`task`** to print `TASK.md` for a manual model run.
 pnpm bench run retro-cruiser --agent codex
 pnpm bench run retro-cruiser --agent claude --model opus
 pnpm bench run retro-cruiser --agent cursor --model gpt-5
+pnpm bench run retro-cruiser --agent codex --model gpt-5.5 --reasoning high --service-tier priority
 ```
 
 The web dashboard exposes the same runner through the agent selector. The runner creates
 the solution directory if needed, passes `BENCH_ID`, `BENCH_DIR`, `BENCH_SOURCE`, and
-`BENCH_SOLUTION` to the child process, and asks the agent to keep changes scoped to the
-solution directory.
+`BENCH_SOLUTION` to the child process, asks the agent to keep changes scoped to the
+solution directory, and creates a scorecard only after the agent run succeeds.
+
+The dashboard model picker uses explicit agent-specific options. Codex exposes GPT-5.5,
+GPT-5.4, GPT-5.4-Mini, GPT-5.3-Codex-Spark, GPT-5.3-Codex, and GPT-5.2. Codex, Claude,
+and Cursor expose reasoning controls where their CLIs support them; Codex and Cursor also
+expose Fast mode. Leaving the model on "CLI default" preserves the installed agent's
+default behavior.
 
 `openrouter` is reserved as a future model source. For now, `bench agents` will show it as
 planned; API-backed runs need a coding-agent runtime with filesystem tools before they can
@@ -134,11 +142,15 @@ Scripts receive these environment variables:
 
 ## Historical runs
 
-For now, keep run history as plain files in git:
+Run history is stored as reviewable files plus local SQLite metadata:
 
-- candidate implementations under `solutions/<benchmark-id>/`,
-- scorecards under `benchmarks/<benchmark-id>/results/`,
+- candidate implementations under `solutions/<benchmark-id>/<timestamp>__<agent>__<model>__reasoning-<level>__mode-<fast-or-standard>/`,
+  so previous solutions are not edited in place,
+- scorecard markdown files under `benchmarks/<benchmark-id>/results/`,
+- local scorecard metadata, structured rubric scores, generated scorecard markdown, and notes in
+  `data/benchmark-history.sqlite` (ignored by git to avoid binary merge conflicts),
 - benchmark source snapshots under `benchmarks/<benchmark-id>/source/` after setup.
 
-A `runs.json` index can be added on top of these files as the comparison workflow firms up;
-it should summarize runs rather than replace the reviewable artifacts.
+The dashboard treats a rubric as the template for a scorecard form. Each criterion is
+persisted with a stable id, weight, score, weighted value, and notes, so comparisons can
+group runs by criterion instead of scraping markdown tables.
