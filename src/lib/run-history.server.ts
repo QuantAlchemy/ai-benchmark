@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BenchmarkRun } from "./db/schema";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { normalizeRunMetrics, type RunMetrics } from "./metrics";
 import { createScorecardData, normalizeScorecardData, type ScorecardData } from "./scorecard";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -25,6 +26,7 @@ type BenchmarkRunRow = {
   scorecard_path: string | null;
   scorecard_content: string;
   scorecard_data: string | null;
+  metrics: string | null;
   rubric_snapshot?: string;
   notes: string;
   created_at: string;
@@ -44,6 +46,7 @@ type CreateBenchmarkRunInput = {
   scorecardPath?: string | null;
   scorecardContent: string;
   scorecardData: ScorecardData;
+  metrics?: RunMetrics;
   notes?: string;
 };
 
@@ -120,6 +123,10 @@ function getDb() {
   if (!hasRunDurationMs) {
     db.exec("ALTER TABLE benchmark_runs ADD COLUMN run_duration_ms INTEGER");
   }
+  const hasMetrics = latestColumns.some((column) => column.name === "metrics");
+  if (!hasMetrics) {
+    db.exec("ALTER TABLE benchmark_runs ADD COLUMN metrics TEXT NOT NULL DEFAULT '{}'");
+  }
   db.exec("UPDATE benchmark_runs SET scorecard_content = rubric_snapshot WHERE scorecard_content = ''");
   const rowsNeedingData = db
     .prepare("SELECT id, scorecard_content, rubric_snapshot FROM benchmark_runs WHERE scorecard_data = '{}' OR scorecard_data = ''")
@@ -147,6 +154,7 @@ function normalizeRun(row: BenchmarkRunRow): BenchmarkRun {
     scorecardPath: row.scorecard_path,
     scorecardContent: row.scorecard_content || row.rubric_snapshot || "",
     scorecardData: normalizeScorecardData(parseJson(row.scorecard_data), row.scorecard_content || row.rubric_snapshot || ""),
+    metrics: normalizeRunMetrics(parseJson(row.metrics), row.run_duration_ms),
     notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -184,11 +192,12 @@ export function createBenchmarkRun(input: CreateBenchmarkRunInput): BenchmarkRun
         rubric_snapshot,
         scorecard_content,
         scorecard_data,
+        metrics,
         notes,
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
     `,
     )
@@ -206,6 +215,7 @@ export function createBenchmarkRun(input: CreateBenchmarkRunInput): BenchmarkRun
       input.scorecardContent,
       input.scorecardContent,
       JSON.stringify(input.scorecardData),
+      JSON.stringify(normalizeRunMetrics(input.metrics, input.runDurationMs ?? null)),
       input.notes ?? "",
       now,
       now,
@@ -231,6 +241,21 @@ export function updateBenchmarkRun(input: UpdateBenchmarkRunInput): BenchmarkRun
     | undefined;
 
   if (!updated) throw new Error(`No benchmark run with id "${input.id}".`);
+  return normalizeRun(updated);
+}
+
+export function updateBenchmarkRunMetrics(id: number, patch: Partial<RunMetrics>): BenchmarkRun {
+  const database = getDb();
+  const row = database.prepare("SELECT * FROM benchmark_runs WHERE id = ?").get(id) as BenchmarkRunRow | undefined;
+  if (!row) throw new Error(`No benchmark run with id "${id}".`);
+
+  const current = normalizeRunMetrics(parseJson(row.metrics), row.run_duration_ms);
+  const next = { ...current, ...patch, version: 1 as const };
+  const now = new Date().toISOString();
+  const updated = database
+    .prepare("UPDATE benchmark_runs SET metrics = ?, updated_at = ? WHERE id = ? RETURNING *")
+    .get(JSON.stringify(next), now, id) as BenchmarkRunRow;
+
   return normalizeRun(updated);
 }
 

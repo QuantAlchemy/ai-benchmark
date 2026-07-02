@@ -1,18 +1,21 @@
 import * as React from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Bot,
   CheckCircle2,
   Clipboard,
   Database,
+  ExternalLink,
   FileCheck2,
   FileText,
   History,
+  LineChart,
   Loader2,
   Play,
   RefreshCw,
   Rocket,
   Save,
+  Square,
   Terminal,
   Trash2,
   XCircle,
@@ -42,10 +45,13 @@ import {
   runBenchmarkAgentAction,
   runBenchmarkAction,
   saveBenchmarkRunAction,
+  stopSolutionAction,
 } from "@/lib/benchmarks.functions";
+import { formatMetricBytes, formatMetricDuration, type RunMetrics } from "@/lib/metrics";
 import {
   renderScorecardMarkdown,
   scorecardMax,
+  scorecardPercent,
   scorecardTotal,
   type ScorecardData,
 } from "@/lib/scorecard";
@@ -60,13 +66,14 @@ import type {
 
 type BenchmarkFiles = Awaited<ReturnType<typeof loadBenchmarkFiles>>;
 type BenchmarkAction = "setup" | "launch" | "verify";
-type ActiveRun = BenchmarkAction | "agent" | "refresh" | null;
+type ActiveRun = BenchmarkAction | "agent" | "stop" | "refresh" | null;
 const DEFAULT_SCORECARD_MODEL = "rubric-v1";
 const RUN_LABELS: Record<Exclude<ActiveRun, null>, string> = {
   setup: "Setup",
   agent: "Run agent",
   launch: "Launch",
   verify: "Verify",
+  stop: "Stop",
   refresh: "Refresh",
 };
 
@@ -219,6 +226,7 @@ function BenchmarkDashboard() {
         id: selectedBenchmark.id,
         action,
         solution: options.solution ?? (action === "launch" || action === "verify" ? selectedRun?.solutionPath : undefined),
+        runId: options.runId ?? (action === "launch" || action === "verify" ? selectedRun?.id : undefined),
       },
     });
     setResult(nextResult);
@@ -317,6 +325,21 @@ function BenchmarkDashboard() {
     setRemovingEntryKey(null);
   }
 
+  async function stopSolution(entry: BenchmarkSolutionEntry) {
+    if (!selectedBenchmark) return;
+    setActiveRun("stop");
+    setActiveEntryKey(entry.key);
+    setLastRunLabel(`Stop ${solutionEntryTitle(entry)}`);
+    setResult(null);
+    const nextResult = await stopSolutionAction({
+      data: { id: selectedBenchmark.id, solutionPath: entry.solutionPath },
+    });
+    setResult(nextResult);
+    await refreshRunHistory();
+    setActiveRun(null);
+    setActiveEntryKey(null);
+  }
+
   async function copyDocument(key: "task" | "rubric" | "readme" | "output" | "scorecard") {
     const currentRun = runHistory.find((run) => run.id === selectedRunId) ?? runHistory[0] ?? null;
     const text =
@@ -330,6 +353,7 @@ function BenchmarkDashboard() {
                 scoreModel: currentRun.scoreModel || DEFAULT_SCORECARD_MODEL,
                 createdAt: currentRun.createdAt,
                 data: scorecardData,
+                metrics: currentRun.metrics,
                 notes: runNotes,
               })
             : ""
@@ -397,6 +421,7 @@ function BenchmarkDashboard() {
   const activeScorecardData = scorecardData ?? selectedRun?.scorecardData ?? null;
   const totalScore = activeScorecardData ? scorecardTotal(activeScorecardData) : 0;
   const maxScore = activeScorecardData ? scorecardMax(activeScorecardData) : 0;
+  const percentScore = activeScorecardData ? scorecardPercent(activeScorecardData) : null;
   const scorecardIsDirty = Boolean(
     selectedRun &&
       activeScorecardData &&
@@ -419,10 +444,18 @@ function BenchmarkDashboard() {
               Setup, agent execution, solution verification, rubrics, and scorecards for benchmark runs.
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={refreshDashboard} disabled={running}>
-            <RefreshCw className={cn("size-4", activeRun === "refresh" && "animate-spin")} aria-hidden="true" />
-            Refresh
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/plot">
+                <LineChart className="size-4" aria-hidden="true" />
+                Results plot
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" onClick={refreshDashboard} disabled={running}>
+              <RefreshCw className={cn("size-4", activeRun === "refresh" && "animate-spin")} aria-hidden="true" />
+              Refresh
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -620,6 +653,17 @@ function BenchmarkDashboard() {
                     <div className={cn("text-xs", result.ok ? "text-emerald-200/80" : "text-red-200/80")}>
                       Exit {result.exitCode} in {formatDuration(result.durationMs)}
                     </div>
+                    {result.ok && result.url ? (
+                      <a
+                        href={result.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium underline underline-offset-2"
+                      >
+                        <ExternalLink className="size-3.5" aria-hidden="true" />
+                        Open app at {result.url}
+                      </a>
+                    ) : null}
                     {!result.ok && result.output ? (
                       <div className="mt-2 line-clamp-3 whitespace-pre-wrap text-xs text-red-100/90">
                         {summarizeOutput(result.output)}
@@ -653,9 +697,13 @@ function BenchmarkDashboard() {
               </CardHeader>
               <CardContent>
                 <pre className="min-h-44 max-h-80 max-w-full overflow-auto rounded-md border bg-black p-4 text-xs leading-5 text-zinc-100">
-                  {activeRun && activeRun !== "refresh"
-                    ? `Running ${activeRun}...`
-                    : result?.output || "Command output will appear here."}
+                  {activeRun && activeRun !== "refresh" ? (
+                    `Running ${activeRun}...`
+                  ) : result?.output ? (
+                    <LinkifiedText text={result.output} />
+                  ) : (
+                    "Command output will appear here."
+                  )}
                 </pre>
               </CardContent>
             </Card>
@@ -678,6 +726,7 @@ function BenchmarkDashboard() {
                       const entryTitle = solutionEntryTitle(entry);
                       const launchRunning = activeRun === "launch" && activeEntryKey === entry.key;
                       const verifyRunning = activeRun === "verify" && activeEntryKey === entry.key;
+                      const stopping = activeRun === "stop" && activeEntryKey === entry.key;
                       const removing = removingEntryKey === entry.key;
                       const selected = selectedEntryKey === entry.key;
                       return (
@@ -704,6 +753,7 @@ function BenchmarkDashboard() {
                             <div className="flex flex-wrap items-center gap-2">
                               <div className="break-all text-xs font-medium">{entryTitle}</div>
                               <Badge variant="outline">{entry.benchmarkId}</Badge>
+                              {entry.launch ? <Badge variant="success">running</Badge> : null}
                               {entry.empty ? <Badge variant="warning">empty folder</Badge> : null}
                               {!entry.run ? <Badge variant="secondary">folder only</Badge> : null}
                             </div>
@@ -753,6 +803,25 @@ function BenchmarkDashboard() {
                                 {verifyRunning ? <Loader2 className="size-4 animate-spin" /> : <FileCheck2 className="size-4" />}
                                 Verify
                               </Button>
+                              {entry.launch ? (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => void stopSolution(entry)}
+                                  disabled={running}
+                                >
+                                  {stopping ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-4" />}
+                                  Stop
+                                </Button>
+                              ) : null}
+                              {entry.launch?.url ? (
+                                <Button variant="secondary" size="sm" asChild>
+                                  <a href={entry.launch.url} target="_blank" rel="noopener noreferrer">
+                                    <ExternalLink className="size-4" />
+                                    Open
+                                  </a>
+                                </Button>
+                              ) : null}
                             </div>
                             <Button
                               variant="outline"
@@ -814,13 +883,19 @@ function BenchmarkDashboard() {
                     <ResultMeta label="Solution" value={selectedRun.solutionPath} />
                     {selectedRun.scorecardPath ? <ResultMeta label="Scorecard" value={selectedRun.scorecardPath} /> : null}
                     <div className="rounded-md border bg-background p-3">
-                      <div className="text-xs font-medium text-muted-foreground">Total</div>
-                      <div className="mt-1 text-lg font-semibold">{totalScore}/{maxScore}</div>
+                      <div className="text-xs font-medium text-muted-foreground">Total (manual rubric)</div>
+                      <div className="mt-1 text-lg font-semibold">
+                        {totalScore}/{maxScore}
+                        {percentScore !== null ? (
+                          <span className="ml-2 text-sm font-medium text-muted-foreground">{percentScore.toFixed(1)}%</span>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                   <Tabs value={historyTab} onValueChange={setHistoryTab} className="min-w-0">
                     <TabsList>
                       <TabsTrigger value="scorecard">Scorecard</TabsTrigger>
+                      <TabsTrigger value="metrics">Metrics</TabsTrigger>
                       <TabsTrigger value="notes">Notes</TabsTrigger>
                     </TabsList>
                     <TabsContent value="scorecard">
@@ -832,6 +907,9 @@ function BenchmarkDashboard() {
                         onCriterionNotes={(id, notes) => updateCriterion(id, { notes })}
                         onCheck={updateCheck}
                       />
+                    </TabsContent>
+                    <TabsContent value="metrics">
+                      <MetricsPanel metrics={selectedRun.metrics} />
                     </TabsContent>
                     <TabsContent value="notes">
                       <Textarea
@@ -1010,6 +1088,104 @@ function ScorecardForm({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function MetricsPanel({ metrics }: { metrics: RunMetrics }) {
+  return (
+    <div className="min-w-0 space-y-3">
+      <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
+        Quantitative factors measured automatically by the harness. They are tracked separately from the manual rubric
+        scorecard and update whenever the agent, verify, or launch commands run.
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <MetricTile label="Agent run time" value={formatMetricDuration(metrics.agentDurationMs)} />
+        <MetricTile
+          label="Solution size"
+          value={
+            metrics.solutionSize
+              ? `${metrics.solutionSize.files} files · ${metrics.solutionSize.lines.toLocaleString()} lines · ${formatMetricBytes(metrics.solutionSize.bytes)}`
+              : "not measured"
+          }
+          detail={metrics.solutionSize ? `measured ${formatDate(metrics.solutionSize.measuredAt)}` : undefined}
+        />
+        <MetricTile
+          label="Verify"
+          value={
+            metrics.verify
+              ? `${metrics.verify.ok ? "pass" : "fail"} · exit ${metrics.verify.exitCode} · ${formatMetricDuration(metrics.verify.durationMs)}`
+              : "not run yet"
+          }
+          detail={metrics.verify ? `checked ${formatDate(metrics.verify.measuredAt)}` : undefined}
+          tone={metrics.verify ? (metrics.verify.ok ? "good" : "bad") : undefined}
+        />
+        <MetricTile
+          label="Launch"
+          value={
+            metrics.launch
+              ? metrics.launch.ok
+                ? `responded${metrics.launch.timeToReadyMs !== null ? ` in ${formatMetricDuration(metrics.launch.timeToReadyMs)}` : ""}`
+                : "started, no HTTP response confirmed"
+              : "not launched yet"
+          }
+          detail={metrics.launch?.url ?? undefined}
+          tone={metrics.launch ? (metrics.launch.ok ? "good" : undefined) : undefined}
+        />
+      </div>
+    </div>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  tone?: "good" | "bad";
+}) {
+  return (
+    <div className="rounded-md border bg-card p-3">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div
+        className={cn(
+          "mt-1 text-sm font-semibold",
+          tone === "good" && "text-emerald-400",
+          tone === "bad" && "text-red-400",
+        )}
+      >
+        {value}
+      </div>
+      {detail ? <div className="mt-1 break-all text-[11px] text-muted-foreground">{detail}</div> : null}
+    </div>
+  );
+}
+
+const OUTPUT_URL_PATTERN = /(https?:\/\/[^\s"'<>\])]+)/g;
+
+function LinkifiedText({ text }: { text: string }) {
+  const parts = text.split(OUTPUT_URL_PATTERN);
+  return (
+    <>
+      {parts.map((part, index) =>
+        index % 2 === 1 ? (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sky-400 underline underline-offset-2 hover:text-sky-300"
+          >
+            {part}
+          </a>
+        ) : (
+          <React.Fragment key={index}>{part}</React.Fragment>
+        ),
+      )}
+    </>
   );
 }
 
