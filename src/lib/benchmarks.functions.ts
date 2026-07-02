@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
   createScorecard,
+  getAllBenchmarkRuns,
   getAllSolutionEntries,
   getBenchmarkAgents,
   getBenchmarkFiles,
@@ -12,6 +13,7 @@ import {
   runBenchmarkAgent,
   runBenchmarkScript,
   saveBenchmarkRun,
+  stopBenchmarkSolution,
 } from "./benchmarks.server";
 import type { ScorecardData } from "./scorecard";
 
@@ -30,11 +32,21 @@ export const loadBenchmarkFiles = createServerFn({ method: "GET" })
   });
 
 export const runBenchmarkAction = createServerFn({ method: "POST" })
-  .validator((data: { id: string; action: "setup" | "launch" | "verify"; solution?: string }) => data)
+  .validator((data: { id: string; action: "setup" | "launch" | "verify"; solution?: string; runId?: number }) => data)
   .handler(({ data }) => {
-    if (data.action === "launch") return launchBenchmarkSolution(data.id, data.solution);
-    return runBenchmarkScript(data.id, data.action, data.solution);
+    if (data.action === "launch") return launchBenchmarkSolution(data.id, data.solution, data.runId);
+    return runBenchmarkScript(data.id, data.action, data.solution, data.runId);
   });
+
+export const stopSolutionAction = createServerFn({ method: "POST" })
+  .validator((data: { id: string; solutionPath: string }) => data)
+  .handler(({ data }) => {
+    return stopBenchmarkSolution(data.id, data.solutionPath);
+  });
+
+export const loadAllBenchmarkRuns = createServerFn({ method: "GET" }).handler(() => {
+  return getAllBenchmarkRuns();
+});
 
 export const runBenchmarkAgentAction = createServerFn({ method: "POST" })
   .validator(

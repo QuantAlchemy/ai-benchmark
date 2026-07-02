@@ -1,5 +1,6 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { InferSelectModel } from "drizzle-orm";
+import type { RunMetrics } from "../metrics";
 import type { ScorecardData } from "../scorecard";
 
 export const benchmarkRuns = sqliteTable("benchmark_runs", {
@@ -16,6 +17,7 @@ export const benchmarkRuns = sqliteTable("benchmark_runs", {
   scorecardPath: text("scorecard_path"),
   scorecardContent: text("scorecard_content").notNull().default(""),
   scorecardData: text("scorecard_data", { mode: "json" }).$type<ScorecardData>().notNull().default({} as ScorecardData),
+  metrics: text("metrics", { mode: "json" }).$type<RunMetrics>().notNull().default({} as RunMetrics),
   notes: text("notes").notNull().default(""),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

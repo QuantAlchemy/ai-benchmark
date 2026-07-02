@@ -15,8 +15,15 @@ import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listAgents, runAgentOnBenchmark } from "../../lib/agents.mjs";
-import { createBenchmarkRun, deleteBenchmarkRun, listBenchmarkRuns, updateBenchmarkRun } from "./run-history.server";
+import {
+  createBenchmarkRun,
+  deleteBenchmarkRun,
+  listBenchmarkRuns,
+  updateBenchmarkRun,
+  updateBenchmarkRunMetrics,
+} from "./run-history.server";
 import type { BenchmarkRun } from "./db/schema";
+import { emptyRunMetrics, type RunMetrics, type SolutionSizeMetrics } from "./metrics";
 import { createScorecardData, renderScorecardMarkdown, type ScorecardData } from "./scorecard";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -73,7 +80,15 @@ export type CommandResult = {
   durationMs: number;
   output: string;
   solutionPath?: string;
+  url?: string;
   run?: BenchmarkRun;
+};
+
+export type ActiveLaunch = {
+  pid: number;
+  url: string | null;
+  command: string;
+  startedAt: string;
 };
 
 export type BenchmarkSolutionEntry = {
@@ -87,6 +102,7 @@ export type BenchmarkSolutionEntry = {
   updatedAt: string;
   empty: boolean;
   source: "solution";
+  launch: ActiveLaunch | null;
   run?: BenchmarkRun;
   runs: BenchmarkRun[];
 };
@@ -187,7 +203,12 @@ export function getBenchmarkFiles(id: string) {
   };
 }
 
-export async function runBenchmarkScript(id: string, scriptKey: "setup" | "verify", solution?: string): Promise<CommandResult> {
+export async function runBenchmarkScript(
+  id: string,
+  scriptKey: "setup" | "verify",
+  solution?: string,
+  runId?: number,
+): Promise<CommandResult> {
   const benchmark = getManifest(id);
   const rel = benchmark.scripts?.[scriptKey];
   if (!rel) throw new Error(`Benchmark "${benchmark.id}" declares no "${scriptKey}" script.`);
@@ -251,12 +272,26 @@ export async function runBenchmarkScript(id: string, scriptKey: "setup" | "verif
     child.on("error", reject);
     child.on("close", (code) => {
       const exitCode = code ?? 1;
+      const durationMs = Date.now() - startedAt;
+      let run: BenchmarkRun | undefined;
+      if (scriptKey === "verify" && runId) {
+        run = updateBenchmarkRunMetrics(runId, {
+          verify: {
+            ok: exitCode === 0,
+            exitCode,
+            durationMs,
+            measuredAt: new Date().toISOString(),
+          },
+          solutionSize: measureSolutionSize(solutionPath),
+        });
+      }
       resolvePromise({
         ok: exitCode === 0,
         exitCode,
         command: `bash ${scriptPath}`,
-        durationMs: Date.now() - startedAt,
+        durationMs,
         output: chunks.join("").trimEnd(),
+        run,
       });
     });
   });
@@ -345,9 +380,175 @@ async function wait(ms: number) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
-export async function launchBenchmarkSolution(id: string, solution?: string): Promise<CommandResult> {
+const SKIPPED_SOLUTION_DIRS = new Set(["node_modules", ".git"]);
+const BUILD_OUTPUT_DIRS = new Set(["dist", "build", "out", ".output", ".next", "target"]);
+const TEXT_FILE_EXTENSIONS = new Set([
+  "c", "cc", "cpp", "h", "hpp", "m", "mm", "rs", "go", "java", "kt", "swift",
+  "js", "jsx", "ts", "tsx", "mjs", "cjs", "vue", "svelte",
+  "py", "rb", "php", "sh", "bash", "zsh", "ps1", "cmake", "make", "mk",
+  "html", "htm", "css", "scss", "less", "json", "yaml", "yml", "toml", "ini",
+  "md", "txt", "xml", "svg", "sql", "glsl", "vert", "frag",
+]);
+const MAX_MEASURED_FILES = 20_000;
+const MAX_LINE_COUNT_BYTES = 2 * 1024 * 1024;
+
+function measureSolutionSize(solutionPath: string, includeBuildOutput = false): SolutionSizeMetrics | null {
+  if (!existsSync(solutionPath) || !statSync(solutionPath).isDirectory()) return null;
+
+  let files = 0;
+  let bytes = 0;
+  let lines = 0;
+  const stack = [solutionPath];
+  while (stack.length && files < MAX_MEASURED_FILES) {
+    const dir = stack.pop()!;
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (SKIPPED_SOLUTION_DIRS.has(name)) continue;
+      if (!includeBuildOutput && BUILD_OUTPUT_DIRS.has(name)) continue;
+      const path = join(dir, name);
+      let stats;
+      try {
+        stats = statSync(path);
+      } catch {
+        continue;
+      }
+      if (stats.isDirectory()) {
+        stack.push(path);
+        continue;
+      }
+      if (!stats.isFile()) continue;
+      files += 1;
+      bytes += stats.size;
+      const extension = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+      if (TEXT_FILE_EXTENSIONS.has(extension) && stats.size <= MAX_LINE_COUNT_BYTES) {
+        try {
+          lines += readFileSync(path, "utf8").split("\n").length;
+        } catch {
+          // unreadable file; size still counted
+        }
+      }
+      if (files >= MAX_MEASURED_FILES) break;
+    }
+  }
+
+  // A solution that is only build output (e.g. a committed dist/) would otherwise measure as 0 files.
+  if (files === 0 && !includeBuildOutput) return measureSolutionSize(solutionPath, true);
+  return { files, bytes, lines, measuredAt: new Date().toISOString() };
+}
+
+type LaunchRecord = {
+  benchmarkId: string;
+  solutionPath: string;
+  pid: number;
+  pidStartTime: string | null;
+  command: string;
+  url: string | null;
+  logPath: string;
+  startedAt: string;
+};
+
+const LAUNCH_STATE_PATH = join(ROOT, "data", "launch-state.json");
+
+function readLaunchState(): Record<string, LaunchRecord> {
+  if (!existsSync(LAUNCH_STATE_PATH)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(LAUNCH_STATE_PATH, "utf8"));
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, LaunchRecord>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLaunchState(state: Record<string, LaunchRecord>) {
+  mkdirSync(join(ROOT, "data"), { recursive: true });
+  writeFileSync(LAUNCH_STATE_PATH, JSON.stringify(state, null, 2));
+}
+
+// Kernel start time (field 22 of /proc/<pid>/stat). Unlike the command line it
+// is fixed at fork, so it survives exec (pnpm -> node) and detects PID reuse.
+function readProcStartTime(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+    return afterComm.split(" ")[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A launch record only counts as alive when the PID exists AND (where /proc is
+ * available) its start time still matches the one recorded at spawn time.
+ * This prevents ever signaling an unrelated process that reused the PID.
+ */
+function launchRecordIsAlive(record: LaunchRecord) {
+  if (!isProcessAlive(record.pid)) return false;
+  if (record.pidStartTime === null) return true;
+  return readProcStartTime(record.pid) === record.pidStartTime;
+}
+
+function registerLaunch(record: LaunchRecord) {
+  const state = readLaunchState();
+  state[record.solutionPath] = record;
+  writeLaunchState(state);
+}
+
+function unregisterLaunch(solutionPath: string) {
+  const state = readLaunchState();
+  if (solutionPath in state) {
+    delete state[solutionPath];
+    writeLaunchState(state);
+  }
+}
+
+function getActiveLaunchRecord(solutionPath: string): LaunchRecord | null {
+  const state = readLaunchState();
+  const record = state[resolve(solutionPath)];
+  if (!record) return null;
+  if (!launchRecordIsAlive(record)) {
+    unregisterLaunch(record.solutionPath);
+    return null;
+  }
+  return record;
+}
+
+function toActiveLaunch(record: LaunchRecord): ActiveLaunch {
+  return { pid: record.pid, url: record.url, command: record.command, startedAt: record.startedAt };
+}
+
+const LOCAL_URL_PATTERN = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:\/[^\s"'<>\])]*)?/i;
+
+function findLocalUrlInLog(logPath: string): string | null {
+  if (!existsSync(logPath)) return null;
+  try {
+    const match = readFileSync(logPath, "utf8").match(LOCAL_URL_PATTERN);
+    if (!match) return null;
+    return match[0].replace("0.0.0.0", "127.0.0.1");
+  } catch {
+    return null;
+  }
+}
+
+export async function launchBenchmarkSolution(id: string, solution?: string, runId?: number): Promise<CommandResult> {
   const benchmark = getManifest(id);
-  const solutionPath = resolveLaunchSolutionPath(resolveBenchmarkSolution(benchmark, solution));
+  // requestedPath is the entry folder the UI tracks; the actual launch may run
+  // from a launchable child inside it. The launch registry is keyed by requestedPath.
+  const requestedPath = resolve(resolveBenchmarkSolution(benchmark, solution));
+  const solutionPath = resolveLaunchSolutionPath(requestedPath);
   if (!existsSync(solutionPath)) {
     return {
       ok: false,
@@ -355,6 +556,23 @@ export async function launchBenchmarkSolution(id: string, solution?: string): Pr
       command: "launch",
       durationMs: 0,
       output: `Solution path does not exist: ${solutionPath}`,
+    };
+  }
+
+  const existing = getActiveLaunchRecord(requestedPath);
+  if (existing) {
+    return {
+      ok: true,
+      exitCode: 0,
+      command: `${existing.command} (pid ${existing.pid})`,
+      durationMs: 0,
+      output: [
+        `Already running since ${existing.startedAt} (pid ${existing.pid}).`,
+        existing.url ? `URL: ${existing.url}` : "No URL detected for this launch.",
+        "Use Stop to terminate it before launching again.",
+      ].join("\n"),
+      solutionPath,
+      url: existing.url ?? undefined,
     };
   }
 
@@ -429,20 +647,30 @@ export async function launchBenchmarkSolution(id: string, solution?: string): Pr
   closeSync(errFd);
   child.unref();
 
+  const pidStartTime = child.pid ? readProcStartTime(child.pid) : null;
+
   let exitCode: number | null = null;
   child.once("exit", (code) => {
     exitCode = code ?? 1;
   });
 
   let responded = false;
+  let detectedUrl = "";
   for (let attempt = 0; attempt < 16; attempt += 1) {
     await wait(500);
-    if (url && (await probeUrl(url))) {
-      responded = true;
-      break;
+    // The log URL wins over the assumed one: dev servers move to a free port
+    // (and print the address) when the requested port is taken.
+    const candidates = [...new Set([findLocalUrlInLog(logPath), url].filter(Boolean))] as string[];
+    for (const candidate of candidates) {
+      if (await probeUrl(candidate)) {
+        detectedUrl = candidate;
+        responded = true;
+        break;
+      }
     }
-    if (exitCode !== null) break;
+    if (responded || exitCode !== null) break;
   }
+  if (!detectedUrl) detectedUrl = findLocalUrlInLog(logPath) ?? url;
 
   const log = existsSync(logPath) ? readFileSync(logPath, "utf8").trimEnd() : "";
   const displayCommand = renderCommand(command, args);
@@ -456,6 +684,31 @@ export async function launchBenchmarkSolution(id: string, solution?: string): Pr
     };
   }
 
+  if (child.pid) {
+    registerLaunch({
+      benchmarkId: benchmark.id,
+      solutionPath: requestedPath,
+      pid: child.pid,
+      pidStartTime,
+      command: displayCommand,
+      url: detectedUrl || null,
+      logPath,
+      startedAt: new Date(startedAt).toISOString(),
+    });
+  }
+
+  let run: BenchmarkRun | undefined;
+  if (runId) {
+    run = updateBenchmarkRunMetrics(runId, {
+      launch: {
+        ok: responded,
+        url: detectedUrl || null,
+        timeToReadyMs: responded ? Date.now() - startedAt : null,
+        measuredAt: new Date().toISOString(),
+      },
+    });
+  }
+
   return {
     ok: true,
     exitCode: 0,
@@ -463,10 +716,79 @@ export async function launchBenchmarkSolution(id: string, solution?: string): Pr
     durationMs: Date.now() - startedAt,
     output: [
       `Started solution from: ${solutionPath}`,
-      url ? (responded ? `URL: ${url}` : `URL candidate: ${url} (no HTTP response confirmed yet)`) : "",
+      detectedUrl ? (responded ? `URL: ${detectedUrl}` : `URL candidate: ${detectedUrl} (no HTTP response confirmed yet)`) : "",
       `PID: ${child.pid}`,
       `Log: ${logPath}`,
       log ? `\nRecent output:\n${log}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    solutionPath,
+    url: detectedUrl || undefined,
+    run,
+  };
+}
+
+export async function stopBenchmarkSolution(id: string, solution: string): Promise<CommandResult> {
+  getManifest(id);
+  const solutionPath = resolve(solution);
+  const startedAt = Date.now();
+  const state = readLaunchState();
+  const record = state[solutionPath];
+  if (!record) {
+    return {
+      ok: false,
+      exitCode: 2,
+      command: "stop",
+      durationMs: 0,
+      output: `No tracked launch for:\n${solutionPath}\n\nOnly processes started from this dashboard can be stopped here.`,
+    };
+  }
+  if (!launchRecordIsAlive(record)) {
+    unregisterLaunch(solutionPath);
+    return {
+      ok: true,
+      exitCode: 0,
+      command: `stop (pid ${record.pid})`,
+      durationMs: Date.now() - startedAt,
+      output: `Process ${record.pid} is no longer running (or the PID now belongs to another process). Cleared the launch record without sending any signal.`,
+    };
+  }
+
+  // The launch was spawned detached, so the PID is its process-group leader;
+  // signaling -pid takes down the whole tree (package manager + dev server).
+  const signalGroup = (signal: NodeJS.Signals) => {
+    try {
+      process.kill(-record.pid, signal);
+    } catch {
+      try {
+        process.kill(record.pid, signal);
+      } catch {
+        // already gone
+      }
+    }
+  };
+
+  signalGroup("SIGTERM");
+  for (let attempt = 0; attempt < 10 && launchRecordIsAlive(record); attempt += 1) {
+    await wait(200);
+  }
+  const forced = launchRecordIsAlive(record);
+  if (forced) {
+    signalGroup("SIGKILL");
+    await wait(200);
+  }
+  unregisterLaunch(solutionPath);
+
+  return {
+    ok: true,
+    exitCode: 0,
+    command: `stop (pid ${record.pid})`,
+    durationMs: Date.now() - startedAt,
+    output: [
+      `Stopped ${record.command} (pid ${record.pid})${forced ? " with SIGKILL after SIGTERM timed out" : ""}.`,
+      record.url ? `Was serving: ${record.url}` : "",
+      `Log: ${record.logPath}`,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -515,6 +837,10 @@ export function getBenchmarkRuns(id: string): BenchmarkRun[] {
   return listBenchmarkRuns(benchmark.id);
 }
 
+export function getAllBenchmarkRuns(): BenchmarkRun[] {
+  return listBenchmarkRuns();
+}
+
 function isDirectoryEmpty(path: string): boolean {
   if (!existsSync(path) || !statSync(path).isDirectory()) return false;
   return readdirSync(path).length === 0;
@@ -539,6 +865,7 @@ function upsertSolutionEntry(
     existing.empty = stats?.isDirectory() ? isDirectoryEmpty(resolved) : existing.empty;
     return;
   }
+  const activeLaunch = getActiveLaunchRecord(resolved);
   entries.set(resolved, {
     key: `solution:${benchmark.id}:${resolved}`,
     benchmarkId: benchmark.id,
@@ -550,6 +877,7 @@ function upsertSolutionEntry(
     updatedAt: stats?.mtime.toISOString() ?? run?.updatedAt ?? run?.createdAt ?? new Date(0).toISOString(),
     empty: stats?.isDirectory() ? isDirectoryEmpty(resolved) : false,
     source: "solution",
+    launch: activeLaunch ? toActiveLaunch(activeLaunch) : null,
     run,
     runs: run ? [run] : [],
   });
@@ -667,6 +995,7 @@ export function saveBenchmarkRun(data: {
         scoreModel: updated.scoreModel,
         createdAt: updated.createdAt,
         data: updated.scorecardData,
+        metrics: updated.metrics,
         notes: updated.notes,
       }),
     );
@@ -740,6 +1069,11 @@ function createScorecardRun(
   const defaultSolution = defaultSolutionPath(benchmark);
   const requestedPath = requestedSolution ? resolve(requestedSolution) : "";
   const solutionPath = requestedPath === resolve(SOLUTIONS_DIR) ? resolve(defaultSolution) : resolve(requestedSolution || defaultSolution);
+  const metrics: RunMetrics = {
+    ...emptyRunMetrics(),
+    agentDurationMs: options.runDurationMs ?? null,
+    solutionSize: measureSolutionSize(solutionPath),
+  };
   const run = createBenchmarkRun({
     benchmarkId: benchmark.id,
     benchmarkName: benchmark.name,
@@ -753,6 +1087,7 @@ function createScorecardRun(
     scorecardPath: out,
     scorecardContent: rubric,
     scorecardData,
+    metrics,
     notes: options.notes ?? "",
   });
   writeFileSync(
@@ -763,6 +1098,7 @@ function createScorecardRun(
       scoreModel: model,
       createdAt,
       data: scorecardData,
+      metrics,
       notes: options.notes ?? "",
     }),
   );

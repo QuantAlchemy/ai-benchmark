@@ -1,3 +1,5 @@
+import { formatMetricBytes, formatMetricDuration, type RunMetrics } from "./metrics";
+
 export type ScorecardCriterion = {
   id: string;
   index: number;
@@ -76,12 +78,23 @@ export function scorecardMax(data: ScorecardData) {
   return data.criteria.reduce((total, criterion) => total + 5 * criterion.weight, 0);
 }
 
+export function scorecardScored(data: ScorecardData) {
+  return data.criteria.some((criterion) => typeof criterion.score === "number");
+}
+
+export function scorecardPercent(data: ScorecardData) {
+  const max = scorecardMax(data);
+  if (!max) return null;
+  return (scorecardTotal(data) / max) * 100;
+}
+
 export function renderScorecardMarkdown(input: {
   benchmarkName: string;
   benchmarkId: string;
   scoreModel: string;
   createdAt: string;
   data: ScorecardData;
+  metrics?: RunMetrics | null;
   notes: string;
 }) {
   const total = scorecardTotal(input.data);
@@ -116,6 +129,28 @@ export function renderScorecardMarkdown(input: {
     lines.push("## Checks", "");
     for (const check of input.data.checks) {
       lines.push(`- [${check.checked ? "x" : " "}] ${check.label}`);
+    }
+    lines.push("");
+  }
+
+  if (input.metrics) {
+    const metrics = input.metrics;
+    lines.push("## Quantitative Metrics (auto-measured)", "");
+    lines.push(`- **Agent run time:** ${formatMetricDuration(metrics.agentDurationMs)}`);
+    if (metrics.solutionSize) {
+      lines.push(
+        `- **Solution size:** ${metrics.solutionSize.files} files, ${metrics.solutionSize.lines} lines, ${formatMetricBytes(metrics.solutionSize.bytes)}`,
+      );
+    }
+    if (metrics.verify) {
+      lines.push(
+        `- **Verify:** ${metrics.verify.ok ? "pass" : "fail"} (exit ${metrics.verify.exitCode}, ${formatMetricDuration(metrics.verify.durationMs)}, ${metrics.verify.measuredAt.slice(0, 19)})`,
+      );
+    }
+    if (metrics.launch) {
+      lines.push(
+        `- **Launch:** ${metrics.launch.ok ? "responded" : "no HTTP response"}${metrics.launch.url ? ` at ${metrics.launch.url}` : ""}${metrics.launch.timeToReadyMs !== null ? ` in ${formatMetricDuration(metrics.launch.timeToReadyMs)}` : ""}`,
+      );
     }
     lines.push("");
   }
