@@ -4,6 +4,7 @@ export type AgentModelOption = {
   description?: string;
   supportsServiceTier?: boolean;
   supportsFastMode?: boolean;
+  isExactModel?: boolean;
 };
 
 export type AgentReasoningOption = {

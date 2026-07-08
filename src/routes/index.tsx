@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Rocket,
   Save,
+  Search,
   Square,
   Terminal,
   Trash2,
@@ -31,6 +32,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -100,6 +102,7 @@ function BenchmarkDashboard() {
   const selectedBenchmark = benchmarks.find((benchmark) => benchmark.id === selectedId) ?? benchmarks[0];
   const [agentId, setAgentId] = React.useState(loadedAgents.find((agent) => agent.available)?.id ?? loadedAgents[0]?.id ?? "codex");
   const [agentModel, setAgentModel] = React.useState("");
+  const [modelFilter, setModelFilter] = React.useState("");
   const [reasoningEffort, setReasoningEffort] = React.useState("high");
   const [fastMode, setFastMode] = React.useState("standard");
   const [files, setFiles] = React.useState<BenchmarkFiles | null>(loaded.initialFiles);
@@ -412,8 +415,21 @@ function BenchmarkDashboard() {
   const selectedAgent = agents.find((agent) => agent.id === agentId) ?? agents[0];
   const agentModelOptions = selectedAgent?.models?.length ? selectedAgent.models : getAgentModelOptions(agentId);
   const selectedModelOption = agentModelOptions.find((option) => option.value === agentModel) ?? agentModelOptions[0];
+  const normalizedModelFilter = modelFilter.trim().toLowerCase();
+  const filteredAgentModelOptions = normalizedModelFilter
+    ? agentModelOptions.filter((option) =>
+        [option.label, option.value, option.description]
+          .filter(Boolean)
+          .some((value) => value.toLowerCase().includes(normalizedModelFilter)),
+      )
+    : agentModelOptions;
+  const visibleAgentModelOptions =
+    selectedModelOption && !filteredAgentModelOptions.some((option) => option.value === selectedModelOption.value)
+      ? [selectedModelOption, ...filteredAgentModelOptions]
+      : filteredAgentModelOptions;
   const reasoningOptions = getAgentReasoningOptions(agentId);
-  const reasoningEnabled = supportsAgentReasoning(agentId);
+  const selectedCursorExactModel = agentId === "cursor" && Boolean(selectedModelOption?.isExactModel);
+  const reasoningEnabled = supportsAgentReasoning(agentId) && !selectedCursorExactModel;
   const fastModeEnabled = supportsAgentFastMode(agentId, selectedModelOption);
   const serviceTierValue =
     fastModeEnabled && fastMode === "fast" ? (agentId === "codex" ? "priority" : "fast") : "";
@@ -523,7 +539,11 @@ function BenchmarkDashboard() {
                   <select
                     id="agent-select"
                     value={agentId}
-                    onChange={(event) => setAgentId(event.target.value)}
+                    onChange={(event) => {
+                      setAgentId(event.target.value);
+                      setAgentModel("");
+                      setModelFilter("");
+                    }}
                     className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={running}
                   >
@@ -537,6 +557,17 @@ function BenchmarkDashboard() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="agent-model-name">Agent model override</Label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                    <Input
+                      id="agent-model-filter"
+                      value={modelFilter}
+                      onChange={(event) => setModelFilter(event.target.value)}
+                      placeholder="Filter models"
+                      className="pl-8"
+                      disabled={running || agentModelOptions.length <= 1}
+                    />
+                  </div>
                   <select
                     id="agent-model-name"
                     value={agentModel}
@@ -544,12 +575,17 @@ function BenchmarkDashboard() {
                     className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={running}
                   >
-                    {agentModelOptions.map((option, index) => (
+                    {visibleAgentModelOptions.map((option, index) => (
                       <option key={`${option.value || "cli-default"}-${index}`} value={option.value}>
                         {option.label}
                       </option>
                     ))}
                   </select>
+                  {normalizedModelFilter ? (
+                    <p className="text-xs text-muted-foreground">
+                      {filteredAgentModelOptions.length} of {agentModelOptions.length} models match
+                    </p>
+                  ) : null}
                   {selectedModelOption?.description ? (
                     <p className="text-xs text-muted-foreground">{selectedModelOption.description}</p>
                   ) : null}
