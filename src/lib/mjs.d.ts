@@ -5,6 +5,7 @@ declare module "*.mjs" {
     description?: string;
     supportsServiceTier?: boolean;
     supportsFastMode?: boolean;
+    isExactModel?: boolean;
   };
 
   export type AgentStatus = {
