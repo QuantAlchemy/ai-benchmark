@@ -18,6 +18,8 @@ This repo is a **harness**, not a set of solutions. It gives you, for each bench
 |----|--------------------------|--------|
 | [`asteroid-engine`](benchmarks/asteroid-engine/) | Modernize a 2010 C++/OpenGL/OpenAL 2D engine + asteroid demo so it builds & runs on a current machine with **one command and zero manual dependency installs**. | C++ · native · build systems |
 | [`retro-cruiser`](benchmarks/retro-cruiser/) | Recreate a Phaser 2.0.7 arcade shooter as a modern web game. The original source is lost — the model gets only the **minified deployed bundle** + assets to reverse-engineer behavior from. | JS · games · reverse engineering |
+| [`voidbreaker`](benchmarks/voidbreaker/) | Reimagine the asteroid demo as a **complete, addictive modern arcade game** — not a faithful port. Same source DNA; invent the systems that make players chase one more run. | JS · games · game design |
+| [`cruiser-reloaded`](benchmarks/cruiser-reloaded/) | Reimagine Retro Cruiser as a **complete, addictive modern arcade game** — not a fidelity rebuild. Use the minified original + assets as a springboard, then invent the finished product. | JS · games · game design |
 
 Each benchmark is fully self-contained in its own folder, so they run independently.
 
