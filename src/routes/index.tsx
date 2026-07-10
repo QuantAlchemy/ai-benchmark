@@ -28,6 +28,7 @@ import {
   getAgentModelOptions,
   supportsAgentFastMode,
   supportsAgentReasoning,
+  type AgentModelOption,
 } from "@/lib/agent-options";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -413,21 +414,23 @@ function BenchmarkDashboard() {
 
   const running = activeRun !== null;
   const selectedAgent = agents.find((agent) => agent.id === agentId) ?? agents[0];
-  const agentModelOptions = selectedAgent?.models?.length ? selectedAgent.models : getAgentModelOptions(agentId);
+  const agentModelOptions: AgentModelOption[] = selectedAgent?.models?.length
+    ? selectedAgent.models
+    : getAgentModelOptions(agentId);
   const selectedModelOption = agentModelOptions.find((option) => option.value === agentModel) ?? agentModelOptions[0];
   const normalizedModelFilter = modelFilter.trim().toLowerCase();
   const filteredAgentModelOptions = normalizedModelFilter
     ? agentModelOptions.filter((option) =>
         [option.label, option.value, option.description]
           .filter(Boolean)
-          .some((value) => value.toLowerCase().includes(normalizedModelFilter)),
+          .some((value) => value?.toLowerCase().includes(normalizedModelFilter)),
       )
     : agentModelOptions;
   const visibleAgentModelOptions =
     selectedModelOption && !filteredAgentModelOptions.some((option) => option.value === selectedModelOption.value)
       ? [selectedModelOption, ...filteredAgentModelOptions]
       : filteredAgentModelOptions;
-  const reasoningOptions = getAgentReasoningOptions(agentId);
+  const reasoningOptions = getAgentReasoningOptions(agentId, selectedModelOption);
   const selectedCursorExactModel = agentId === "cursor" && Boolean(selectedModelOption?.isExactModel);
   const reasoningEnabled = supportsAgentReasoning(agentId) && !selectedCursorExactModel;
   const fastModeEnabled = supportsAgentFastMode(agentId, selectedModelOption);
@@ -571,7 +574,17 @@ function BenchmarkDashboard() {
                   <select
                     id="agent-model-name"
                     value={agentModel}
-                    onChange={(event) => setAgentModel(event.target.value)}
+                    onChange={(event) => {
+                      const nextModel = event.target.value;
+                      const nextOption = agentModelOptions.find((option) => option.value === nextModel);
+                      setAgentModel(nextModel);
+                      if (
+                        nextOption?.reasoningEfforts?.length &&
+                        !nextOption.reasoningEfforts.some((option) => option.value === reasoningEffort)
+                      ) {
+                        setReasoningEffort(nextOption.defaultReasoningEffort || nextOption.reasoningEfforts[0].value);
+                      }
+                    }}
                     className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={running}
                   >

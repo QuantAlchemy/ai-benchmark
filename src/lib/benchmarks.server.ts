@@ -80,6 +80,8 @@ export type CommandResult = {
   durationMs: number;
   output: string;
   solutionPath?: string;
+  model?: string;
+  requestedModel?: string;
   url?: string;
   run?: BenchmarkRun;
 };
@@ -819,7 +821,7 @@ export async function runBenchmarkAgent(
 
   const run = createScorecardRun(benchmark, DEFAULT_SCORECARD_MODEL, {
     agent,
-    agentModel: model,
+    agentModel: result.model || model,
     reasoningEffort,
     serviceTier,
     runDurationMs: result.durationMs,

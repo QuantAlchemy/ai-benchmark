@@ -5,6 +5,9 @@ export type AgentModelOption = {
   supportsServiceTier?: boolean;
   supportsFastMode?: boolean;
   isExactModel?: boolean;
+  resolvedModel?: string;
+  reasoningEfforts?: AgentReasoningOption[];
+  defaultReasoningEffort?: string;
 };
 
 export type AgentReasoningOption = {
@@ -15,6 +18,27 @@ export type AgentReasoningOption = {
 export const AGENT_MODEL_OPTIONS: Record<string, AgentModelOption[]> = {
   codex: [
     { value: "", label: "CLI default", description: "Use the local Codex default." },
+    {
+      value: "gpt-5.6-sol",
+      label: "GPT-5.6-Sol",
+      description: "Latest frontier agentic coding model.",
+      supportsServiceTier: true,
+      supportsFastMode: true,
+    },
+    {
+      value: "gpt-5.6-terra",
+      label: "GPT-5.6-Terra",
+      description: "Balanced agentic coding model for everyday work.",
+      supportsServiceTier: true,
+      supportsFastMode: true,
+    },
+    {
+      value: "gpt-5.6-luna",
+      label: "GPT-5.6-Luna",
+      description: "Fast and affordable agentic coding model.",
+      supportsServiceTier: true,
+      supportsFastMode: true,
+    },
     {
       value: "gpt-5.5",
       label: "GPT-5.5",
@@ -90,7 +114,11 @@ export function getAgentModelOptions(agentId: string): AgentModelOption[] {
   return AGENT_MODEL_OPTIONS[agentId] ?? [{ value: "", label: "CLI default" }];
 }
 
-export function getAgentReasoningOptions(agentId: string): readonly AgentReasoningOption[] {
+export function getAgentReasoningOptions(
+  agentId: string,
+  model?: AgentModelOption,
+): readonly AgentReasoningOption[] {
+  if (model?.reasoningEfforts?.length) return model.reasoningEfforts;
   if (agentId === "claude") return CLAUDE_REASONING_OPTIONS;
   if (agentId === "codex" || agentId === "cursor") return BASE_REASONING_OPTIONS;
   return [];

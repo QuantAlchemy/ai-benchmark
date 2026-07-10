@@ -6,6 +6,9 @@ declare module "*.mjs" {
     supportsServiceTier?: boolean;
     supportsFastMode?: boolean;
     isExactModel?: boolean;
+    resolvedModel?: string;
+    reasoningEfforts?: Array<{ value: string; label: string; description?: string }>;
+    defaultReasoningEffort?: string;
   };
 
   export type AgentStatus = {
@@ -41,5 +44,7 @@ declare module "*.mjs" {
     durationMs: number;
     output: string;
     solutionPath?: string;
+    model?: string;
+    requestedModel?: string;
   }>;
 }

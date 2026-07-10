@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>frames</key>
+	<dict>
+		<key>asteroid.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{1542, 772}, {478, 470}}</string>
+			<key>offset</key>
+			<string>{1, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{2, 5}, {478, 470}}</string>
+			<key>sourceSize</key>
+			<string>{480, 480}</string>
+		</dict>
+		<key>explosion_30_128.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{1028, 2}, {758, 606}}</string>
+			<key>offset</key>
+			<string>{0, -14}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{5, 31}, {758, 606}}</string>
+			<key>sourceSize</key>
+			<string>{768, 640}</string>
+		</dict>
+		<key>galaxies_alpha.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{2, 772}, {1024, 768}}</string>
+			<key>offset</key>
+			<string>{0, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{0, 0}, {1024, 768}}</string>
+			<key>sourceSize</key>
+			<string>{1024, 768}</string>
+		</dict>
+		<key>orion_alpha.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{2, 2}, {1024, 768}}</string>
+			<key>offset</key>
+			<string>{0, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{0, 0}, {1024, 768}}</string>
+			<key>sourceSize</key>
+			<string>{1024, 768}</string>
+		</dict>
+		<key>panel.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{324, 1542}, {640, 240}}</string>
+			<key>offset</key>
+			<string>{0, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{0, 0}, {640, 240}}</string>
+			<key>sourceSize</key>
+			<string>{640, 240}</string>
+		</dict>
+		<key>plasma.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{2022, 772}, {8, 20}}</string>
+			<key>offset</key>
+			<string>{0, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{8, 2}, {8, 20}}</string>
+			<key>sourceSize</key>
+			<string>{24, 24}</string>
+		</dict>
+		<key>ship.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{1028, 610}, {48, 71}}</string>
+			<key>offset</key>
+			<string>{0, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{0, 0}, {48, 71}}</string>
+			<key>sourceSize</key>
+			<string>{48, 71}</string>
+		</dict>
+		<key>timesnewroman24.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{1028, 772}, {512, 576}}</string>
+			<key>offset</key>
+			<string>{0, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{0, 0}, {512, 576}}</string>
+			<key>sourceSize</key>
+			<string>{512, 576}</string>
+		</dict>
+		<key>verdana10.png</key>
+		<dict>
+			<key>frame</key>
+			<string>{{2, 1542}, {320, 256}}</string>
+			<key>offset</key>
+			<string>{0, -0}</string>
+			<key>rotated</key>
+			<false/>
+			<key>sourceColorRect</key>
+			<string>{{0, 0}, {320, 256}}</string>
+			<key>sourceSize</key>
+			<string>{320, 256}</string>
+		</dict>
+	</dict>
+	<key>metadata</key>
+	<dict>
+		<key>format</key>
+		<integer>2</integer>
+		<key>size</key>
+		<string>{2048, 2048}</string>
+	</dict>
+</dict>
+</plist>

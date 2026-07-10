@@ -88,11 +88,13 @@ the solution directory if needed, passes `BENCH_ID`, `BENCH_DIR`, `BENCH_SOURCE`
 `BENCH_SOLUTION` to the child process, asks the agent to keep changes scoped to the
 solution directory, and creates a scorecard only after the agent run succeeds.
 
-The dashboard model picker uses explicit agent-specific options. Codex exposes GPT-5.5,
-GPT-5.4, GPT-5.4-Mini, GPT-5.3-Codex-Spark, GPT-5.3-Codex, and GPT-5.2. Codex, Claude,
-and Cursor expose reasoning controls where their CLIs support them; Codex and Cursor also
-expose Fast mode. Leaving the model on "CLI default" preserves the installed agent's
-default behavior.
+The dashboard model picker uses agent-specific options. For Codex, it reads the installed
+CLI's local model catalog, including each model's description, reasoning levels, and Fast
+mode support, so newly available models appear without a benchmark code update. A static
+list is used only when that catalog is unavailable. Codex, Claude, and Cursor expose
+reasoning controls where their CLIs support them; Codex and Cursor also expose Fast mode.
+Leaving the model on "CLI default" preserves the installed agent's default behavior while
+recording the resolved model in run history and versioned solution folder names.
 
 `openrouter` is reserved as a future model source. For now, `bench agents` will show it as
 planned; API-backed runs need a coding-agent runtime with filesystem tools before they can
