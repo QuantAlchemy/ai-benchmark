@@ -1,0 +1,27 @@
+{
+  "id": "cruiser-reloaded",
+  "name": "Cruiser Reloaded — Reimagine Retro Cruiser as a Complete Arcade Game",
+  "summary": "Turn the lost Phaser Retro Cruiser into a complete, addictive modern arcade game — not a faithful rebuild. Use the minified original and assets as a springboard, then invent the systems that make the run loop irresistible.",
+  "category": "JS / games / game-design",
+  "difficulty": "hard",
+  "source": {
+    "description": "The deployed build of 'Retro Cruiser': index.html, a minified index.min.js (Phaser 2.0.7 + game logic), phaser.map, CSS, and the full original asset set. The original is a short side-scrolling shooter with fuel/health, rocks, drones, weapon tiers, and boosts — incomplete as a modern product. Live reference: https://ralphunlimited.com/blog/retro-cruiser/",
+    "deployed_url": "https://ralphunlimited.com/blog/retro-cruiser/",
+    "repos": [
+      {
+        "name": "ralphunlimited",
+        "url": "https://github.com/ralphsmith80/ralphunlimited",
+        "commit": "7ddc89f44ec3fdb231bc187d273b33bc3fbc698b",
+        "subpath": "public/games/retro-cruiser"
+      }
+    ]
+  },
+  "scripts": {
+    "setup": "scripts/setup.sh",
+    "verify": "scripts/verify.sh"
+  },
+  "files": {
+    "task": "TASK.md",
+    "rubric": "RUBRIC.md"
+  }
+}

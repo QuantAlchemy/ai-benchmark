@@ -6,6 +6,9 @@ Candidate implementations live here, grouped by benchmark id:
 solutions/<benchmark-id>/
 ```
 
+Known ids include `asteroid-engine`, `retro-cruiser`, `voidbreaker`, and
+`cruiser-reloaded`.
+
 `bench verify <id>` uses `solutions/<id>/` by default. Passing `--solution solutions`
 also resolves to `solutions/<id>/`, so the aggregate directory can be used from scripts
 without repeating the benchmark id.

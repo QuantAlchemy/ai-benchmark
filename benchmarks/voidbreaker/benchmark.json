@@ -1,0 +1,30 @@
+{
+  "id": "voidbreaker",
+  "name": "Voidbreaker — Reimagine Asteroids as a Complete Arcade Game",
+  "summary": "Turn the 2010 asteroid engine demo into a complete, addictive modern arcade game — not a faithful port. Use the original assets and feel as a springboard, then invent the systems that make players chase one more run.",
+  "category": "JS / games / game-design",
+  "difficulty": "hard",
+  "source": {
+    "description": "A 2010 C++/OpenGL asteroid demo and its 2D engine. The demo is a thin tech sample (ship, asteroids, shooting, explosions, audio) — not a finished product. Assets under Resources/ (ship, asteroids, plasma, explosions, backgrounds, SFX, music) are the visual/audio DNA to reuse or reinterpret.",
+    "repos": [
+      {
+        "name": "Game_Engine",
+        "url": "https://github.com/ralphsmith80/Game_Engine",
+        "commit": "6ad9544638c247de0ead285a5e36b244949cf036"
+      },
+      {
+        "name": "Asteroid_Demo",
+        "url": "https://github.com/ralphsmith80/Asteroid_Demo",
+        "commit": "94567640000cf0ad7fdfef95b0ea5cd972c1d281"
+      }
+    ]
+  },
+  "scripts": {
+    "setup": "scripts/setup.sh",
+    "verify": "scripts/verify.sh"
+  },
+  "files": {
+    "task": "TASK.md",
+    "rubric": "RUBRIC.md"
+  }
+}
