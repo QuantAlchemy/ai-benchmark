@@ -131,6 +131,28 @@ describe("artifact finalization validation", () => {
     });
   });
 
+  it("accepts the base64 SHA-256 representation returned by Convex storage metadata", () => {
+    const artifactDigest = "1e82d03145bd1fd14c528a507ed8d038fd2561389f38f92f56916b633c1d5b9f";
+    const input = {
+      ...validFinalizeInput(),
+      digest: artifactDigest,
+      sizeBytes: 15,
+      chunks: [{ index: 0, storageId: "storage-a", sizeBytes: 15, sha256: artifactDigest }],
+    };
+    const metadata = new Map([
+      ["storage-a", { size: 15, sha256: "HoLQMUW9H9FMUopQftjQOP0lYTifOPkvVpFrYzwdW58=" }],
+    ]);
+
+    expect(validateArtifactFinalize(input, metadata)).toEqual({
+      ...input,
+      manifest: {
+        version: 1,
+        files: [{ path: "source/main.ts", size: 12, mode: 0o644, sha256: digest("0") }],
+        totalExpandedBytes: 12,
+      },
+    });
+  });
+
   it("rejects malformed artifact digests and unknown input fields", () => {
     expect(() =>
       validateArtifactFinalize({ ...validFinalizeInput(), digest: digest("A") }, validMetadata()),

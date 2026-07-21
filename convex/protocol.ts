@@ -1,4 +1,5 @@
 import { sha256 } from "@noble/hashes/sha2.js";
+import { sha256HexToBase64 } from "./crypto";
 
 export const MAX_PULL_LIMIT = 200;
 export const DEFAULT_PULL_LIMIT = 100;
@@ -406,7 +407,9 @@ export function validateArtifactFinalize(
   for (const chunk of chunks) {
     const metadata = metadataByStorageId.get(chunk.storageId);
     if (!metadata) throw new Error(`Stored chunk ${chunk.index} does not exist`);
-    if (metadata.size !== chunk.sizeBytes || metadata.sha256 !== chunk.sha256) {
+    // Convex `_storage.sha256` is base64; the portable sync protocol uses lowercase hex.
+    const hashMatches = metadata.sha256 === chunk.sha256 || metadata.sha256 === sha256HexToBase64(chunk.sha256);
+    if (metadata.size !== chunk.sizeBytes || !hashMatches) {
       throw new Error(`Stored chunk metadata does not match chunk ${chunk.index}`);
     }
   }
