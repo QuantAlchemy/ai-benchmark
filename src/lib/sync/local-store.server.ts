@@ -442,17 +442,19 @@ export function openLocalStore({
       resolvedDataRoot,
       `.${LOCAL_DATABASE_FILENAME}.legacy-${randomUUID()}.tmp`,
     );
-    const legacy = new DatabaseSync(legacyDatabasePath, { readOnly: true });
     try {
-      legacy.exec(`VACUUM INTO '${temporaryDatabasePath.replaceAll("'", "''")}'`);
-    } finally {
-      legacy.close();
-    }
-    try {
-      linkSync(temporaryDatabasePath, databasePath);
-      migratedDatabase = true;
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+      const legacy = new DatabaseSync(legacyDatabasePath, { readOnly: true });
+      try {
+        legacy.exec(`VACUUM INTO '${temporaryDatabasePath.replaceAll("'", "''")}'`);
+      } finally {
+        legacy.close();
+      }
+      try {
+        linkSync(temporaryDatabasePath, databasePath);
+        migratedDatabase = true;
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+      }
     } finally {
       rmSync(temporaryDatabasePath, { force: true });
     }

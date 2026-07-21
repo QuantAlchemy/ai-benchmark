@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import { packageSolutionArtifact, type PackagedSolutionArtifact } from "./artifa
 import { openLocalStore } from "./local-store.server";
 import { discardSyncOperation, getFailedSyncOperations, retrySyncOperation } from "./sync-runtime.server";
 import {
+  installMaterializedDirectoryNoClobber,
   SyncService,
   type PullEventsResult,
   type RemoteArtifactMetadata,
@@ -168,6 +169,36 @@ function createRun(dataRoot: string, projectRoot: string, solutionPath: string) 
 }
 
 describe("offline-first synchronization service", () => {
+  it("installs a replacement using a private destination directory", async () => {
+    const root = await temporaryRoot("install-private-");
+    const stagingPath = join(root, "staging");
+    const destinationPath = join(root, "destination");
+    await mkdir(stagingPath);
+    await writeFile(join(stagingPath, "candidate.txt"), "candidate");
+
+    await installMaterializedDirectoryNoClobber(stagingPath, destinationPath);
+
+    expect((await stat(destinationPath)).mode & 0o077).toBe(0);
+    expect(await readFile(join(destinationPath, "candidate.txt"), "utf8")).toBe("candidate");
+    expect(existsSync(stagingPath)).toBe(false);
+  });
+
+  it("does not replace a concurrently created empty materialization destination", async () => {
+    const root = await temporaryRoot("install-no-clobber-");
+    const stagingPath = join(root, "staging");
+    const destinationPath = join(root, "destination");
+    await mkdir(stagingPath);
+    await writeFile(join(stagingPath, "candidate.txt"), "candidate");
+    await mkdir(destinationPath);
+    const destinationInode = (await stat(destinationPath)).ino;
+
+    await expect(installMaterializedDirectoryNoClobber(stagingPath, destinationPath)).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+    expect((await stat(destinationPath)).ino).toBe(destinationInode);
+    expect(await readdir(destinationPath)).toEqual([]);
+    expect(await readFile(join(stagingPath, "candidate.txt"), "utf8")).toBe("candidate");
+  });
   it("refuses to synchronize a data root bound to a different provisioned client", async () => {
     const dataRoot = await temporaryRoot("sync-identity-data-");
     const projectRoot = await temporaryRoot("sync-identity-project-");

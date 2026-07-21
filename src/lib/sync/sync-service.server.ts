@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { link, mkdir, rename, rm, stat } from "node:fs/promises";
+import { cp, link, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import {
   describeArtifactChunks,
@@ -17,6 +17,30 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const PULL_LIMIT = 100;
 export const MAX_OUTBOX_ATTEMPTS = 8;
 const SYNC_PREFLIGHT_RETRY_MS = 30_000;
+
+export async function installMaterializedDirectoryNoClobber(stagingPath: string, destinationPath: string) {
+  // Intentional: claiming the final path with mkdir prevents POSIX rename from clobbering a concurrent empty directory.
+  // Copying can expose a partial untrusted tree briefly; trust is recorded only after the complete copy succeeds.
+  await mkdir(destinationPath, { mode: 0o700 });
+  try {
+    for (const entry of await readdir(stagingPath)) {
+      await cp(join(stagingPath, entry), join(destinationPath, entry), {
+        recursive: true,
+        errorOnExist: true,
+        force: false,
+      });
+    }
+    await rm(stagingPath, { recursive: true, force: true });
+  } catch (error) {
+    if (existsSync(destinationPath)) {
+      await rename(
+        destinationPath,
+        join(dirname(destinationPath), `.${basename(destinationPath)}.failed-${randomUUID()}`),
+      );
+    }
+    throw error;
+  }
+}
 
 export interface SyncOutboxOperation {
   operationId: string;
@@ -722,7 +746,7 @@ export class SyncService {
         if (existsSync(materializedPath)) {
           throw new Error(`Materialization destination changed while replacing ${materializedPath}`);
         }
-        await rename(stagingPath, materializedPath);
+        await installMaterializedDirectoryNoClobber(stagingPath, materializedPath);
         installedReplacement = true;
       }
       const now = new Date().toISOString();

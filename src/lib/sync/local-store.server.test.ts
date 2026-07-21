@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -300,5 +300,21 @@ describe("local synchronization store", () => {
     const reopened = openLocalStore({ dataRoot, legacyDataRoot });
     expect(reopened.prepare("SELECT value FROM marker").get()).toEqual({ value: "local" });
     reopened.close();
+  });
+
+  it("removes a partial temporary database when VACUUM INTO fails", () => {
+    const legacyDataRoot = temporaryRoot("corrupt-legacy-root");
+    const dataRoot = temporaryRoot("failed-vacuum-target");
+    const legacyPath = join(legacyDataRoot, "benchmark-history.sqlite");
+    const legacy = new DatabaseSync(legacyPath);
+    legacy.exec("CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES(quote(randomblob(1000)));");
+    legacy.close();
+
+    const descriptor = openSync(legacyPath, "r+");
+    writeSync(descriptor, Buffer.from([0]), 0, 1, 4096);
+    closeSync(descriptor);
+
+    expect(() => openLocalStore({ dataRoot, legacyDataRoot })).toThrow(/malformed/);
+    expect(readdirSync(dataRoot).filter((name) => name.includes(".legacy-") && name.endsWith(".tmp"))).toEqual([]);
   });
 });
