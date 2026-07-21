@@ -97,7 +97,9 @@ function printSyncStatus(status) {
   console.log(`${bold("data root")}   ${status.dataRoot}`);
   console.log(`${bold("database")}    ${status.databasePath}`);
   console.log(`${bold("cursor")}      ${status.cursor}`);
-  console.log(`${bold("outbox")}      ${status.pendingOperations} pending (${status.failedOperations} failed)`);
+  console.log(
+    `${bold("outbox")}      ${status.pendingOperations} pending (${status.failedOperations} failed, ${status.deadLetteredOperations} dead-lettered)`,
+  );
   console.log(`${bold("last sync")}   ${status.lastSyncAt ?? "never"}`);
   if (status.lastError) console.log(`${bold("last error")}  ${status.lastError}`);
 }
@@ -293,13 +295,45 @@ const commands = {
     ok("Local SQLite schema and legacy import are initialized.");
   },
 
+  async "sync-failures"() {
+    heading("Failed benchmark sync operations");
+    const { getFailedSyncOperations } = await loadSyncRuntime();
+    const operations = getFailedSyncOperations();
+    if (!operations.length) return ok("No failed sync operations.");
+    for (const operation of operations) {
+      console.log(`${bold(operation.operationId)}  ${operation.operationType}  run ${operation.runUid}`);
+      console.log(
+        `  attempts ${operation.attemptCount}${operation.deadLetteredAt ? ` · dead-lettered ${operation.deadLetteredAt}` : ""}`,
+      );
+      if (operation.lastError) console.log(`  ${operation.lastError}`);
+    }
+  },
+
+  async "sync-retry"() {
+    const operationId = positional[0];
+    if (!operationId) throw new Error('"sync-retry" needs an operation id. Run `pnpm bench sync-failures`.');
+    const { retrySyncOperation } = await loadSyncRuntime();
+    retrySyncOperation(operationId);
+    ok(`Queued failed sync operation for retry: ${operationId}`);
+  },
+
+  async "sync-discard"() {
+    const operationId = positional[0];
+    if (!operationId) throw new Error('"sync-discard" needs an operation id. Run `pnpm bench sync-failures`.');
+    const { discardSyncOperation } = await loadSyncRuntime();
+    discardSyncOperation(operationId);
+    warn(`Discarded failed sync operation: ${operationId}`);
+  },
+
   async "sync-diagnostics"() {
     heading("Benchmark sync diagnostics");
     const { getSyncStatus } = await loadSyncRuntime();
     const status = await getSyncStatus();
     printSyncStatus(status);
     if (!status.configured) warn("Remote credentials are absent; offline writes remain enabled and queued locally.");
-    else if (status.failedOperations) warn("Use `pnpm bench sync` to retry failed outbox operations now.");
+    else if (status.deadLetteredOperations) {
+      warn("Dead-lettered operations require `pnpm bench sync-failures`, then `sync-retry` or `sync-discard`.");
+    } else if (status.failedOperations) warn("Failed outbox operations will retry automatically.");
     else ok("Local sync configuration and durable outbox are healthy.");
   },
 
@@ -321,6 +355,9 @@ const commands = {
       ["sync", "push local changes and pull remote history now"],
       ["sync-status", "show local outbox, cursor, and configuration status"],
       ["sync-import", "initialize/migrate the durable local sync database"],
+      ["sync-failures", "list failed outbox operations and remediation details"],
+      ["sync-retry <operation-id>", "reset a failed outbox operation for retry"],
+      ["sync-discard <operation-id>", "explicitly discard an irrecoverable failed operation"],
       ["sync-diagnostics", "show offline/remote sync diagnostics"],
       ["help", "show this help"],
     ];

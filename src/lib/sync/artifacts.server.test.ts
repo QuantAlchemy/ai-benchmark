@@ -279,6 +279,32 @@ describe("solution artifacts", () => {
     await expect(stat(join(root, "escape.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects group or world-writable modes from remote artifact manifests", async () => {
+    const root = await makeTempDir("artifact-writable-mode-");
+    const artifactPath = join(root, "writable-mode.tar.gz");
+    const content = Buffer.from("actual\n");
+    const manifest = Buffer.from(
+      `${JSON.stringify({
+        version: 1,
+        files: [{ path: "source.txt", size: content.length, mode: 0o666, sha256: sha256(content) }],
+        totalExpandedBytes: content.length,
+      })}\n`,
+    );
+    const artifact = makeGzipTar([
+      { path: ".ai-benchmark-artifact-manifest.json", content: manifest, mode: 0o600 },
+      { path: "source.txt", content, mode: 0o666 },
+    ]);
+    await writeFile(artifactPath, artifact);
+
+    await expect(
+      materializeSolutionArtifact({
+        artifactPath,
+        expectedArtifactSha256: sha256(artifact),
+        destinationDir: join(root, "destination"),
+      }),
+    ).rejects.toThrow("Unsafe artifact mode: source.txt");
+  });
+
   it("rejects archive contents that do not match every manifest field", async () => {
     const root = await makeTempDir("artifact-manifest-");
     const artifactPath = join(root, "mismatch.tar.gz");

@@ -203,12 +203,24 @@ Operational commands:
 pnpm bench sync-import       # initialize/migrate the local store and legacy history
 pnpm bench sync-status       # inspect outbox count, cursor, and last error
 pnpm bench sync              # force an immediate push/pull cycle
+pnpm bench sync-failures     # list failed/dead-lettered operation ids and errors
+pnpm bench sync-retry <id>   # reset one failed operation for another retry cycle
+pnpm bench sync-discard <id> # explicitly discard one irrecoverable failed operation
 pnpm bench sync-diagnostics  # explain offline/configuration state
 pnpm validate:sync           # run the isolated two-replica HTTP/Verify/Launch acceptance test
 ```
 
-The dashboard header shows `offline only`, `not yet synchronized`, queued/failed counts, `sync error`, or `synced`, and provides a
-manual retry button. Launch and Verify call the same ensure-local operation: a remote solution
+Per-operation push or packaging failures retry with backoff and are dead-lettered after eight
+unsuccessful attempts so a permanent authorization or payload error cannot loop forever. Connectivity
+and authentication-preflight failures remain retryable without consuming that per-operation budget.
+Inspect the error before choosing `sync-retry`; use `sync-discard` only when the queued local change
+should be abandoned. When a newer remote artifact supersedes an already materialized solution path,
+the verified old tree is preserved as a hidden `.replaced-*` sibling backup before the new tree is
+installed.
+
+The dashboard header shows `offline only`, `not yet synchronized`, queued/failed/dead-lettered counts,
+`sync error`, or `synced`; dead-lettered entries require the CLI remediation commands above. Launch
+and Verify call the same ensure-local operation: a remote solution
 artifact is downloaded, SHA-256 verified, safely extracted, and atomically materialized before
 execution. Artifacts use a strict source allowlist and reject links, traversal, auth files,
 unsafe archive entries, digest mismatches, and overwrite attempts.

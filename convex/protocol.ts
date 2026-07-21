@@ -180,6 +180,7 @@ function parseManifest(manifestJson: string): ArtifactManifest {
       !Number.isSafeInteger(value.mode) ||
       (value.mode as number) < 0 ||
       (value.mode as number) > 0o777 ||
+      Boolean((value.mode as number) & 0o022) ||
       typeof value.sha256 !== "string" ||
       !SHA256.test(value.sha256)
     ) {

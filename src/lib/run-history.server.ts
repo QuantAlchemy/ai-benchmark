@@ -5,7 +5,7 @@ import type { BenchmarkRun } from "./db/schema";
 import { normalizeRunMetrics, type RunMetrics } from "./metrics";
 import { createScorecardData, normalizeScorecardData, type ScorecardData } from "./scorecard";
 import { readServerSyncConfig } from "./sync/config.server";
-import { openLocalStore, type LocalStore } from "./sync/local-store.server";
+import { defaultLegacyDataRoot, openLocalStore, type LocalStore } from "./sync/local-store.server";
 import { scheduleSync } from "./sync/sync-runtime.server";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -263,15 +263,24 @@ export class RunHistoryStore {
 export function createRunHistoryStore({
   dataRoot,
   projectRoot = ROOT,
+  legacyDataRoot = defaultLegacyDataRoot(),
 }: {
   dataRoot?: string;
   projectRoot?: string;
+  legacyDataRoot?: string;
 } = {}) {
   const config = readServerSyncConfig({ projectRoot });
   const resolvedDataRoot = resolve(dataRoot ?? config.dataRoot);
   const clientId =
     config.credentials && resolve(config.dataRoot) === resolvedDataRoot ? config.credentials.clientId : undefined;
-  return new RunHistoryStore(openLocalStore({ dataRoot: resolvedDataRoot, clientId }), projectRoot);
+  return new RunHistoryStore(
+    openLocalStore({
+      dataRoot: resolvedDataRoot,
+      legacyDataRoot: dataRoot === undefined ? legacyDataRoot : undefined,
+      clientId,
+    }),
+    projectRoot,
+  );
 }
 
 let defaultStore: RunHistoryStore | null = null;

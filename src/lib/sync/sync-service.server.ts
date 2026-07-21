@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { link, mkdir, rename, rm, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import {
   describeArtifactChunks,
   materializeSolutionArtifact,
@@ -15,6 +15,8 @@ import { openLocalStore, type LocalStore } from "./local-store.server";
 const RUN_UID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const PULL_LIMIT = 100;
+export const MAX_OUTBOX_ATTEMPTS = 8;
+const SYNC_PREFLIGHT_RETRY_MS = 30_000;
 
 export interface SyncOutboxOperation {
   operationId: string;
@@ -124,6 +126,35 @@ type PortableRunSnapshot = {
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/[\r\n]+/g, " ").slice(0, 500);
+}
+
+function recordOutboxFailure(store: LocalStore, operation: OutboxRow, message: string): void {
+  const attempt = operation.attempt_count + 1;
+  const failedAt = new Date();
+  const deadLetteredAt = attempt >= MAX_OUTBOX_ATTEMPTS ? failedAt.toISOString() : null;
+  const delayMs = Math.min(300_000, 1_000 * 2 ** Math.min(attempt, 8));
+  const nextAttemptAt = deadLetteredAt ? null : new Date(failedAt.getTime() + delayMs).toISOString();
+  store
+    .prepare(
+      `UPDATE sync_outbox SET status = 'failed', attempt_count = ?, next_attempt_at = ?,
+         dead_lettered_at = ?, last_error = ?, updated_at = ? WHERE operation_id = ?`,
+    )
+    .run(attempt, nextAttemptAt, deadLetteredAt, message, failedAt.toISOString(), operation.operation_id);
+}
+
+function recordOutboxPreflightFailure(store: LocalStore, operation: OutboxRow, message: string): void {
+  const failedAt = new Date();
+  store
+    .prepare(
+      `UPDATE sync_outbox SET status = 'failed', next_attempt_at = ?, last_error = ?, updated_at = ?
+       WHERE operation_id = ?`,
+    )
+    .run(
+      new Date(failedAt.getTime() + SYNC_PREFLIGHT_RETRY_MS).toISOString(),
+      message,
+      failedAt.toISOString(),
+      operation.operation_id,
+    );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -243,22 +274,26 @@ function hasTrustedMaterialization(store: LocalStore, run: RunRow): boolean {
 
 export class SyncService {
   readonly #dataRoot: string;
+  readonly #legacyDataRoot: string | undefined;
   readonly #projectRoot: string;
   readonly #clientId: string | undefined;
   readonly #transport: SyncTransport;
 
   constructor({
     dataRoot,
+    legacyDataRoot,
     projectRoot,
     clientId,
     transport,
   }: {
     dataRoot: string;
+    legacyDataRoot?: string;
     projectRoot: string;
     clientId?: string;
     transport: SyncTransport;
   }) {
     this.#dataRoot = resolve(dataRoot);
+    this.#legacyDataRoot = legacyDataRoot ? resolve(legacyDataRoot) : undefined;
     this.#projectRoot = resolve(projectRoot);
     this.#clientId = clientId;
     this.#transport = transport;
@@ -266,7 +301,7 @@ export class SyncService {
 
   async syncOnce({ force = false }: { force?: boolean } = {}): Promise<SyncResult> {
     const result: SyncResult = { pushed: 0, pulled: 0, uploaded: 0, downloaded: 0, materialized: 0, errors: [] };
-    const store = openLocalStore({ dataRoot: this.#dataRoot, clientId: this.#clientId });
+    const store = openLocalStore({ dataRoot: this.#dataRoot, legacyDataRoot: this.#legacyDataRoot, clientId: this.#clientId });
     try {
       store
         .prepare(
@@ -279,9 +314,10 @@ export class SyncService {
       const outbox = store
         .prepare(
           force
-            ? "SELECT * FROM sync_outbox ORDER BY created_at, rowid"
+            ? "SELECT * FROM sync_outbox WHERE dead_lettered_at IS NULL ORDER BY created_at, rowid"
             : `SELECT * FROM sync_outbox
-               WHERE status IN ('pending', 'failed') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+               WHERE dead_lettered_at IS NULL
+                 AND status IN ('pending', 'failed') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                ORDER BY created_at, rowid`,
         )
         .all(...(force ? [] : [now])) as OutboxRow[];
@@ -289,17 +325,7 @@ export class SyncService {
         await this.#transport.verifyAuthenticatedClient(store.clientId);
       } catch (error) {
         const message = errorMessage(error);
-        for (const operation of outbox) {
-          const attempt = operation.attempt_count + 1;
-          const delayMs = Math.min(300_000, 1_000 * 2 ** Math.min(attempt, 8));
-          const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
-          store
-            .prepare(
-              `UPDATE sync_outbox SET status = 'failed', attempt_count = ?, next_attempt_at = ?,
-                 last_error = ?, updated_at = ? WHERE operation_id = ?`,
-            )
-            .run(attempt, nextAttemptAt, message, new Date().toISOString(), operation.operation_id);
-        }
+        for (const operation of outbox) recordOutboxPreflightFailure(store, operation, message);
         const failedAt = new Date().toISOString();
         store
           .prepare("UPDATE sync_state SET last_error = ?, updated_at = ? WHERE scope = 'remote'")
@@ -334,16 +360,8 @@ export class SyncService {
           });
           result.pushed += 1;
         } catch (error) {
-          const attempt = initialOperation.attempt_count + 1;
-          const delayMs = Math.min(300_000, 1_000 * 2 ** Math.min(attempt, 8));
-          const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
           const message = errorMessage(error);
-          store
-            .prepare(
-              `UPDATE sync_outbox SET status = 'failed', attempt_count = ?, next_attempt_at = ?,
-                 last_error = ?, updated_at = ? WHERE operation_id = ?`,
-            )
-            .run(attempt, nextAttemptAt, message, new Date().toISOString(), initialOperation.operation_id);
+          recordOutboxFailure(store, initialOperation, message);
           result.errors.push(`push ${initialOperation.operation_id}: ${message}`);
         }
       }
@@ -396,7 +414,7 @@ export class SyncService {
   }
 
   async ensureMaterialized(runId: number): Promise<string> {
-    const store = openLocalStore({ dataRoot: this.#dataRoot, clientId: this.#clientId });
+    const store = openLocalStore({ dataRoot: this.#dataRoot, legacyDataRoot: this.#legacyDataRoot, clientId: this.#clientId });
     try {
       const run = store.prepare("SELECT * FROM benchmark_runs WHERE id = ?").get(runId) as RunRow | undefined;
       if (!run) throw new Error(`No benchmark run with id "${runId}".`);
@@ -542,7 +560,9 @@ export class SyncService {
     if (!RUN_UID_PATTERN.test(event.runUid) || event.operationId.length === 0 || event.operationId.length > 200) {
       throw new Error("Invalid remote sync event");
     }
-    const pending = store.prepare("SELECT 1 FROM sync_outbox WHERE run_uid = ? LIMIT 1").get(event.runUid);
+    const pending = store
+      .prepare("SELECT 1 FROM sync_outbox WHERE run_uid = ? AND status IN ('pending', 'processing') LIMIT 1")
+      .get(event.runUid);
     if (pending) return;
     if (event.operationType === "delete") {
       store.prepare("DELETE FROM benchmark_runs WHERE run_uid = ?").run(event.runUid);
@@ -662,34 +682,67 @@ export class SyncService {
   }
 
   async #materialize(store: LocalStore, run: RunRow, artifact: LocalArtifactRow) {
-    await materializeSolutionArtifact({
-      artifactPath: artifact.archive_path,
-      expectedArtifactSha256: artifact.artifact_digest,
-      destinationDir: run.solution_path,
-    });
-    const now = new Date().toISOString();
-    store.transaction(() => {
-      store.prepare("UPDATE benchmark_runs SET sync_status = 'synced' WHERE id = ?").run(run.id);
-      store
-        .prepare(
-          `UPDATE local_artifacts
-           SET status = 'ready', updated_at = ?
-           WHERE artifact_digest = ?`,
+    const materializedPath = resolve(run.solution_path);
+    const staleMaterialization = existsSync(materializedPath)
+      ? (store
+          .prepare(
+            `SELECT materialization.artifact_digest
+             FROM artifact_materializations AS materialization
+             WHERE materialization.materialized_path = ? AND materialization.artifact_digest <> ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM benchmark_runs AS newer
+                 WHERE newer.solution_path = ? AND newer.id > ?
+               )`,
+          )
+          .get(materializedPath, artifact.artifact_digest, run.solution_path, run.id) as
+          | { artifact_digest: string }
+          | undefined)
+      : undefined;
+    const replacedPath = staleMaterialization
+      ? join(
+          dirname(materializedPath),
+          `.${basename(materializedPath)}.replaced-${staleMaterialization.artifact_digest.slice(0, 12)}-${randomUUID()}`,
         )
-        .run(now, artifact.artifact_digest);
-      const materializedPath = resolve(run.solution_path);
-      store
-        .prepare("DELETE FROM artifact_materializations WHERE materialized_path = ? AND artifact_digest <> ?")
-        .run(materializedPath, artifact.artifact_digest);
-      store
-        .prepare(
-          `INSERT INTO artifact_materializations (
-             artifact_digest, materialized_path, verified_at, updated_at
-           ) VALUES (?, ?, ?, ?)
-           ON CONFLICT(artifact_digest, materialized_path) DO UPDATE SET
-             verified_at = excluded.verified_at, updated_at = excluded.updated_at`,
-        )
-        .run(artifact.artifact_digest, materializedPath, now, now);
-    });
+      : null;
+    // Intentional: preserve the prior verified tree as a sibling backup. It may contain local edits,
+    // so deleting it automatically would turn a remote digest update into a data-loss path.
+    if (replacedPath) await rename(materializedPath, replacedPath);
+
+    try {
+      await materializeSolutionArtifact({
+        artifactPath: artifact.archive_path,
+        expectedArtifactSha256: artifact.artifact_digest,
+        destinationDir: materializedPath,
+      });
+      const now = new Date().toISOString();
+      store.transaction(() => {
+        store.prepare("UPDATE benchmark_runs SET sync_status = 'synced' WHERE id = ?").run(run.id);
+        store
+          .prepare(
+            `UPDATE local_artifacts
+             SET status = 'ready', updated_at = ?
+             WHERE artifact_digest = ?`,
+          )
+          .run(now, artifact.artifact_digest);
+        store
+          .prepare("DELETE FROM artifact_materializations WHERE materialized_path = ? AND artifact_digest <> ?")
+          .run(materializedPath, artifact.artifact_digest);
+        store
+          .prepare(
+            `INSERT INTO artifact_materializations (
+               artifact_digest, materialized_path, verified_at, updated_at
+             ) VALUES (?, ?, ?, ?)
+             ON CONFLICT(artifact_digest, materialized_path) DO UPDATE SET
+               verified_at = excluded.verified_at, updated_at = excluded.updated_at`,
+          )
+          .run(artifact.artifact_digest, materializedPath, now, now);
+      });
+    } catch (error) {
+      if (replacedPath) {
+        await rm(materializedPath, { recursive: true, force: true });
+        await rename(replacedPath, materializedPath);
+      }
+      throw error;
+    }
   }
 }

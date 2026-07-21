@@ -135,6 +135,7 @@ export class LocalStore {
           status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'failed')),
           attempt_count INTEGER NOT NULL DEFAULT 0,
           next_attempt_at TEXT,
+          dead_lettered_at TEXT,
           last_error TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -183,6 +184,7 @@ export class LocalStore {
       this.#addBenchmarkRunColumn("solution_rel_path", "TEXT");
       this.#addBenchmarkRunColumn("artifact_digest", "TEXT");
       this.#addBenchmarkRunColumn("sync_status", "TEXT NOT NULL DEFAULT 'pending'");
+      this.#addSyncOutboxColumn("dead_lettered_at", "TEXT");
       this.#addLocalArtifactColumn("materialized_path", "TEXT");
       this.#database.exec(`
         DELETE FROM artifact_materializations
@@ -291,6 +293,13 @@ export class LocalStore {
     const columns = this.#database.prepare("PRAGMA table_info(benchmark_runs)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === name)) {
       this.#database.exec(`ALTER TABLE benchmark_runs ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
+  #addSyncOutboxColumn(name: string, definition: string) {
+    const columns = this.#database.prepare("PRAGMA table_info(sync_outbox)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === name)) {
+      this.#database.exec(`ALTER TABLE sync_outbox ADD COLUMN ${name} ${definition}`);
     }
   }
 

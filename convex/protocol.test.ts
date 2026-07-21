@@ -180,6 +180,15 @@ describe("artifact finalization validation", () => {
     }
   });
 
+  it("rejects group or world-writable artifact modes", () => {
+    const input = validFinalizeInput();
+    const manifest = JSON.parse(input.manifestJson);
+    manifest.files[0].mode = 0o666;
+    input.manifestJson = JSON.stringify(manifest);
+
+    expect(() => validateArtifactFinalize(input, validMetadata())).toThrow("Invalid artifact manifest");
+  });
+
   it("rejects non-contiguous or reordered chunks", () => {
     const input = validFinalizeInput();
     input.chunks[1]!.index = 2;

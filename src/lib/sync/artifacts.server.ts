@@ -296,6 +296,7 @@ function parseManifest(value: unknown): ArtifactManifest {
     ) {
       throw new Error(`Invalid artifact manifest file at index ${index}`);
     }
+    if ((file.mode as number) & 0o022) throw new Error(`Unsafe artifact mode: ${file.path}`);
     validateSafePath(file.path);
     return file as unknown as ArtifactManifestFile;
   });
@@ -436,7 +437,7 @@ async function verifySolutionArtifact(
         }
         const entryMode = entry.mode;
         if (typeof entryMode !== "number") throw new Error(`Unsafe artifact mode: ${entry.path}`);
-        if (!Number.isSafeInteger(entryMode) || entryMode < 0 || entryMode > 0o777) {
+        if (!Number.isSafeInteger(entryMode) || entryMode < 0 || entryMode > 0o777 || (entryMode & 0o022) !== 0) {
           throw new Error(`Unsafe artifact mode: ${entry.path}`);
         }
         const task = (async () => {

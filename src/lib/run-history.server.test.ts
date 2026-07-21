@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { validateRunPush } from "../../convex/protocol";
 import { createScorecardData } from "./scorecard";
 import { createRunHistoryStore } from "./run-history.server";
+import { getSyncStatus } from "./sync/sync-runtime.server";
 
 const temporaryRoots: string[] = [];
 
@@ -35,6 +36,39 @@ function runInput(projectRoot: string) {
 }
 
 describe("run history sync outbox", () => {
+  it("imports the legacy repository database through the default run-history entry point", () => {
+    const dataRoot = temporaryRoot();
+    const projectRoot = temporaryRoot();
+    const legacyDataRoot = temporaryRoot();
+    const legacy = new DatabaseSync(join(legacyDataRoot, "benchmark-history.sqlite"));
+    legacy.exec("CREATE TABLE marker (value TEXT NOT NULL); INSERT INTO marker VALUES ('legacy');");
+    legacy.close();
+    writeFileSync(join(projectRoot, ".env"), `AI_BENCHMARK_DATA_ROOT=${dataRoot}\n`);
+
+    const history = createRunHistoryStore({ projectRoot, legacyDataRoot });
+    history.close();
+
+    const imported = new DatabaseSync(join(dataRoot, "benchmark-history.sqlite"), { readOnly: true });
+    expect(imported.prepare("SELECT value FROM marker").get()).toEqual({ value: "legacy" });
+    imported.close();
+  });
+
+  it("imports the legacy repository database through the sync-status entry point", async () => {
+    const dataRoot = temporaryRoot();
+    const projectRoot = temporaryRoot();
+    const legacyDataRoot = temporaryRoot();
+    const legacy = new DatabaseSync(join(legacyDataRoot, "benchmark-history.sqlite"));
+    legacy.exec("CREATE TABLE marker (value TEXT NOT NULL); INSERT INTO marker VALUES ('legacy-status');");
+    legacy.close();
+    writeFileSync(join(projectRoot, ".env"), `AI_BENCHMARK_DATA_ROOT=${dataRoot}\n`);
+
+    await getSyncStatus({ projectRoot, legacyDataRoot });
+
+    const imported = new DatabaseSync(join(dataRoot, "benchmark-history.sqlite"), { readOnly: true });
+    expect(imported.prepare("SELECT value FROM marker").get()).toEqual({ value: "legacy-status" });
+    imported.close();
+  });
+
   it("binds default run writes to the provisioned opaque client identity", () => {
     const dataRoot = temporaryRoot();
     const projectRoot = temporaryRoot();

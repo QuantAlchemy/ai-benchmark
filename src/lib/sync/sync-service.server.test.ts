@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateRunPush } from "../../../convex/protocol";
 import { createRunHistoryStore } from "../run-history.server";
 import { createScorecardData } from "../scorecard";
 import { packageSolutionArtifact, type PackagedSolutionArtifact } from "./artifacts.server";
 import { openLocalStore } from "./local-store.server";
+import { discardSyncOperation, getFailedSyncOperations, retrySyncOperation } from "./sync-runtime.server";
 import {
   SyncService,
   type PullEventsResult,
@@ -39,6 +40,8 @@ class MemoryTransport implements SyncTransport {
   readonly events: RemoteSyncEvent[] = [];
   readonly receipts = new Map<string, number>();
   throwAfterFirstAcceptedPush = false;
+  rejectPushMessage: string | null = null;
+  pushAttempts = 0;
   authenticatedClientId: string | null = null;
   #didThrowAfterPush = false;
   #verifiedClientId: string | null = null;
@@ -77,6 +80,8 @@ class MemoryTransport implements SyncTransport {
   }
 
   async pushOperation(operation: SyncOutboxOperation) {
+    this.pushAttempts += 1;
+    if (this.rejectPushMessage) throw new Error(this.rejectPushMessage);
     const payload = JSON.parse(operation.payloadJson) as { run?: { artifactDigest?: string | null } };
     validateRunPush({
       operationId: operation.operationId,
@@ -308,9 +313,17 @@ describe("offline-first synchronization service", () => {
     const historyBefore = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
     const sharedDestination = historyBefore.listBenchmarkRuns()[0]!.solutionPath;
     historyBefore.close();
-    await rm(sharedDestination, { recursive: true, force: true });
     const reassigned = await replicaB.syncOnce({ force: true });
     expect(reassigned).toMatchObject({ pulled: 1, downloaded: 1, materialized: 1, errors: [] });
+    expect(await readFile(join(sharedDestination, "dist", "index.html"), "utf8")).toContain("new digest");
+    const replacementEntries = await readdir(dirname(sharedDestination));
+    const replacementName = replacementEntries.find((entry) =>
+      entry.startsWith(`.${basename(sharedDestination)}.replaced-`),
+    );
+    expect(replacementName).toBeDefined();
+    expect(await readFile(join(dirname(sharedDestination), replacementName!, "dist", "index.html"), "utf8")).toContain(
+      "<title>synced</title>",
+    );
 
     const historyAfter = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
     const runs = historyAfter.listBenchmarkRuns();
@@ -321,6 +334,190 @@ describe("offline-first synchronization service", () => {
     const oldest = runs[1]!;
     await expect(offline.ensureMaterialized(newest.id)).resolves.toBe(sharedDestination);
     await expect(offline.ensureMaterialized(oldest.id)).rejects.toThrow("destination already exists");
+  });
+
+  it("replaces an existing run materialization when that run receives a newer digest", async () => {
+    const projectRootA = await temporaryRoot("sync-update-digest-project-a-");
+    const projectRootB = await temporaryRoot("sync-update-digest-project-b-");
+    const dataRootA = await temporaryRoot("sync-update-digest-data-a-");
+    const dataRootB = await temporaryRoot("sync-update-digest-data-b-");
+    const sourcePath = await createSolution(projectRootA, "updated-path");
+    const runA = createRun(dataRootA, projectRootA, sourcePath);
+    const backend = new MemoryTransport();
+    const replicaA = new SyncService({ dataRoot: dataRootA, projectRoot: projectRootA, transport: backend });
+    const replicaB = new SyncService({ dataRoot: dataRootB, projectRoot: projectRootB, transport: backend });
+
+    expect(await replicaA.syncOnce({ force: true })).toMatchObject({ pushed: 1, uploaded: 1 });
+    expect(await replicaB.syncOnce({ force: true })).toMatchObject({ pulled: 1, materialized: 1 });
+    const historyBefore = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
+    const destination = historyBefore.listBenchmarkRuns()[0]!.solutionPath;
+    historyBefore.close();
+
+    await writeFile(join(sourcePath, "dist", "index.html"), "<!doctype html><title>updated digest</title>\n");
+    createRun(dataRootA, projectRootA, sourcePath);
+    expect(await replicaA.syncOnce({ force: true })).toMatchObject({ pushed: 1, uploaded: 1, errors: [] });
+    const updatedEvent = backend.events.at(-1)!;
+    const updatedPayload = JSON.parse(updatedEvent.payloadJson) as { run: { runUid: string } };
+    updatedPayload.run.runUid = runA.runUid;
+    updatedEvent.runUid = runA.runUid;
+    updatedEvent.payloadJson = JSON.stringify(updatedPayload);
+
+    expect(await replicaB.syncOnce({ force: true })).toMatchObject({ pulled: 1, downloaded: 1, materialized: 1, errors: [] });
+    expect(await readFile(join(destination, "dist", "index.html"), "utf8")).toContain("updated digest");
+    const historyAfter = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
+    expect(historyAfter.listBenchmarkRuns()).toHaveLength(1);
+    historyAfter.close();
+  });
+
+  it("does not dead-letter queued operations while remote preflight is offline", async () => {
+    const dataRoot = await temporaryRoot("sync-offline-preflight-data-");
+    const projectRoot = await temporaryRoot("sync-offline-preflight-project-");
+    createRun(dataRoot, projectRoot, await createSolution(projectRoot));
+    const offline = new SyncService({ dataRoot, projectRoot, transport: new OfflineTransport() });
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const result = await offline.syncOnce({ force: true });
+      expect(result.errors.join("\n")).toContain("offline");
+    }
+
+    const store = openLocalStore({ dataRoot });
+    expect(store.prepare("SELECT status, attempt_count, dead_lettered_at FROM sync_outbox").get()).toEqual({
+      status: "failed",
+      attempt_count: 0,
+      dead_lettered_at: null,
+    });
+    store.close();
+    const recovered = await new SyncService({
+      dataRoot,
+      projectRoot,
+      transport: new MemoryTransport(),
+    }).syncOnce({ force: true });
+    expect(recovered).toMatchObject({ pushed: 1, errors: [] });
+  });
+
+  it("dead-letters permanently failing operations after bounded retries", async () => {
+    const dataRoot = await temporaryRoot("sync-dead-letter-data-");
+    const projectRoot = await temporaryRoot("sync-dead-letter-project-");
+    createRun(dataRoot, projectRoot, await createSolution(projectRoot));
+    const backend = new MemoryTransport();
+    backend.rejectPushMessage = "permanent ownership rejection";
+    const service = new SyncService({ dataRoot, projectRoot, transport: backend });
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const result = await service.syncOnce({ force: true });
+      expect(result.errors.join("\n")).toContain("permanent ownership rejection");
+    }
+    const afterLimit = await service.syncOnce({ force: true });
+
+    expect(backend.pushAttempts).toBe(8);
+    expect(afterLimit).toMatchObject({ pushed: 0, errors: [] });
+    const store = openLocalStore({ dataRoot });
+    const operation = store
+      .prepare("SELECT operation_id, attempt_count, dead_lettered_at FROM sync_outbox")
+      .get() as { operation_id: string; attempt_count: number; dead_lettered_at: string };
+    expect(operation).toMatchObject({
+      attempt_count: 8,
+      dead_lettered_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
+    store.close();
+    expect(await getFailedSyncOperations({ dataRoot, projectRoot })).toEqual([
+      expect.objectContaining({ operationId: operation.operation_id, deadLetteredAt: operation.dead_lettered_at }),
+    ]);
+
+    backend.rejectPushMessage = null;
+    retrySyncOperation(operation.operation_id, { dataRoot, projectRoot });
+    expect(await service.syncOnce({ force: true })).toMatchObject({ pushed: 1, errors: [] });
+  });
+
+  it("can explicitly discard an irrecoverable failed operation", async () => {
+    const dataRoot = await temporaryRoot("sync-discard-data-");
+    const projectRoot = await temporaryRoot("sync-discard-project-");
+    createRun(dataRoot, projectRoot, await createSolution(projectRoot));
+    const store = openLocalStore({ dataRoot });
+    const operation = store.prepare("SELECT operation_id FROM sync_outbox").get() as { operation_id: string };
+    store
+      .prepare(
+        `UPDATE sync_outbox
+         SET status = 'failed', attempt_count = 8, dead_lettered_at = '2026-01-01T00:00:00.000Z',
+             last_error = 'not owner' WHERE operation_id = ?`,
+      )
+      .run(operation.operation_id);
+    store.close();
+
+    discardSyncOperation(operation.operation_id, { dataRoot, projectRoot });
+
+    const reopened = openLocalStore({ dataRoot });
+    expect(reopened.prepare("SELECT 1 FROM sync_outbox WHERE operation_id = ?").get(operation.operation_id)).toBeUndefined();
+    expect(reopened.prepare("SELECT sync_status FROM benchmark_runs").get()).toEqual({ sync_status: "local" });
+    reopened.close();
+  });
+
+  it("refuses retry or discard remediation for operations that have not failed", async () => {
+    const dataRoot = await temporaryRoot("sync-active-remediation-data-");
+    const projectRoot = await temporaryRoot("sync-active-remediation-project-");
+    createRun(dataRoot, projectRoot, await createSolution(projectRoot));
+    const store = openLocalStore({ dataRoot });
+    const operation = store.prepare("SELECT operation_id FROM sync_outbox").get() as { operation_id: string };
+    store.close();
+
+    expect(() => retrySyncOperation(operation.operation_id, { dataRoot, projectRoot })).toThrow(
+      "No failed sync operation",
+    );
+    expect(() => discardSyncOperation(operation.operation_id, { dataRoot, projectRoot })).toThrow(
+      "No failed sync operation",
+    );
+
+    const reopened = openLocalStore({ dataRoot });
+    expect(reopened.prepare("SELECT status FROM sync_outbox WHERE operation_id = ?").get(operation.operation_id)).toEqual({
+      status: "pending",
+    });
+    reopened.close();
+  });
+
+  it("applies newer remote events while a failed local operation awaits remediation", async () => {
+    const projectRootA = await temporaryRoot("sync-failed-conflict-project-a-");
+    const projectRootB = await temporaryRoot("sync-failed-conflict-project-b-");
+    const dataRootA = await temporaryRoot("sync-failed-conflict-data-a-");
+    const dataRootB = await temporaryRoot("sync-failed-conflict-data-b-");
+    const runA = createRun(dataRootA, projectRootA, await createSolution(projectRootA));
+    const backend = new MemoryTransport();
+    const replicaA = new SyncService({ dataRoot: dataRootA, projectRoot: projectRootA, transport: backend });
+    const replicaB = new SyncService({ dataRoot: dataRootB, projectRoot: projectRootB, transport: backend });
+    expect(await replicaA.syncOnce({ force: true })).toMatchObject({ pushed: 1, errors: [] });
+    expect(await replicaB.syncOnce({ force: true })).toMatchObject({ pulled: 1, errors: [] });
+
+    const historyB = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
+    const [runB] = historyB.listBenchmarkRuns();
+    historyB.updateBenchmarkRun({
+      id: runB!.id,
+      scoreModel: runB!.scoreModel,
+      scorecardData: runB!.scorecardData,
+      notes: "rejected local edit",
+    });
+    historyB.close();
+    const failedStore = openLocalStore({ dataRoot: dataRootB });
+    failedStore
+      .prepare(
+        `UPDATE sync_outbox
+         SET status = 'failed', next_attempt_at = '2099-01-01T00:00:00.000Z', last_error = 'not owner'`,
+      )
+      .run();
+    failedStore.close();
+
+    const historyA = createRunHistoryStore({ dataRoot: dataRootA, projectRoot: projectRootA });
+    historyA.updateBenchmarkRun({
+      id: runA.id,
+      scoreModel: runA.scoreModel,
+      scorecardData: runA.scorecardData,
+      notes: "new owner update",
+    });
+    historyA.close();
+    expect(await replicaA.syncOnce({ force: true })).toMatchObject({ pushed: 1, errors: [] });
+    expect(await replicaB.syncOnce()).toMatchObject({ pulled: 1, errors: [] });
+
+    const updatedHistoryB = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
+    expect(updatedHistoryB.listBenchmarkRuns()[0]!.notes).toBe("new owner update");
+    updatedHistoryB.close();
   });
 
   it("propagates a locally produced tombstone through the strict remote protocol", async () => {

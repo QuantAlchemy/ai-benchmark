@@ -71,6 +71,43 @@ describe("sync runtime", () => {
     });
   });
 
+  it("reports active, failed, and dead-lettered outbox counts separately", async () => {
+    const dataRoot = await root("sync-runtime-counts-data-");
+    const projectRoot = await root("sync-runtime-counts-project-");
+    const history = createRunHistoryStore({ dataRoot, projectRoot });
+    for (const name of ["active", "failed", "dead"] as const) {
+      history.createBenchmarkRun({
+        benchmarkId: name,
+        benchmarkName: name,
+        solutionPath: join(projectRoot, "solutions", name),
+        scoreModel: "manual",
+        scorecardContent: "# Scorecard",
+        scorecardData: createScorecardData("# Scorecard"),
+      });
+    }
+    history.close();
+    const store = openLocalStore({ dataRoot });
+    store
+      .prepare(
+        `UPDATE sync_outbox SET status = 'failed'
+         WHERE rowid = (SELECT rowid FROM sync_outbox ORDER BY rowid LIMIT 1 OFFSET 1)`,
+      )
+      .run();
+    store
+      .prepare(
+        `UPDATE sync_outbox SET status = 'failed', dead_lettered_at = '2026-01-01T00:00:00.000Z'
+         WHERE rowid = (SELECT MAX(rowid) FROM sync_outbox)`,
+      )
+      .run();
+    store.close();
+
+    await expect(getSyncStatus({ dataRoot, projectRoot, credentials: null })).resolves.toMatchObject({
+      pendingOperations: 1,
+      failedOperations: 1,
+      deadLetteredOperations: 1,
+    });
+  });
+
   it("never trusts a pre-existing directory for an unmaterialized remote artifact", async () => {
     const dataRoot = await root("sync-runtime-remote-data-");
     const projectRoot = await root("sync-runtime-remote-project-");
