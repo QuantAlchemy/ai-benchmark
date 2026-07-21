@@ -15,7 +15,8 @@ data/
 *.sqlite-wal
 benchmarks/*/results/
 
-# Generated benchmark solutions
+# Generated benchmark solutions and the fetched Cruiser Reloaded source bundle
+benchmarks/cruiser-reloaded/source/
 solutions/*/
 
 # OS / editor noise
