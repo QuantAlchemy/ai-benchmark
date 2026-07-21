@@ -392,13 +392,24 @@ describe("offline-first synchronization service", () => {
     createRun(dataRootA, projectRootA, sourcePath);
     expect(await replicaA.syncOnce({ force: true })).toMatchObject({ pushed: 1, errors: [] });
     const updatedEvent = backend.events.at(-1)!;
-    const updatedPayload = JSON.parse(updatedEvent.payloadJson) as { run: { runUid: string } };
+    const updatedPayload = JSON.parse(updatedEvent.payloadJson) as {
+      run: { runUid: string; artifactDigest: string };
+    };
     updatedPayload.run.runUid = runA.runUid;
     updatedEvent.runUid = runA.runUid;
     updatedEvent.payloadJson = JSON.stringify(updatedPayload);
     vi.spyOn(artifactModule, "materializeSolutionArtifact").mockImplementation(async () => {
       await mkdir(destination, { recursive: true });
       await writeFile(join(destination, "independent.txt"), "created by another writer");
+      const concurrentStore = openLocalStore({ dataRoot: dataRootB });
+      concurrentStore
+        .prepare(
+          `INSERT OR REPLACE INTO artifact_materializations (
+            artifact_digest, materialized_path, verified_at, updated_at
+          ) VALUES (?, ?, ?, ?)`,
+        )
+        .run(updatedPayload.run.artifactDigest, destination, new Date().toISOString(), new Date().toISOString());
+      concurrentStore.close();
       throw new Error("injected extraction failure");
     });
 
@@ -410,6 +421,12 @@ describe("offline-first synchronization service", () => {
     const backup = replacementEntries.find((entry) => entry.startsWith(`.${basename(destination)}.replaced-`));
     expect(backup).toBeDefined();
     expect(await readFile(join(dirname(destination), backup!, "dist", "index.html"), "utf8")).toContain("synced");
+    const observedStore = openLocalStore({ dataRoot: dataRootB });
+    const concurrentTrust = observedStore
+      .prepare("SELECT artifact_digest FROM artifact_materializations WHERE materialized_path = ?")
+      .get(destination) as { artifact_digest: string } | undefined;
+    observedStore.close();
+    expect(concurrentTrust?.artifact_digest).toBe(updatedPayload.run.artifactDigest);
   });
 
   it("does not dead-letter queued operations while remote preflight is offline", async () => {

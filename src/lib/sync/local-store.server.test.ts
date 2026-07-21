@@ -47,6 +47,40 @@ describe("local synchronization store", () => {
     }
   });
 
+  it("reconciles a default offline store even when no legacy root argument is passed", () => {
+    const dataRoot = temporaryRoot("default-reconcile-");
+    const offline = openLocalStore({ dataRoot });
+    const offlineClientId = offline.clientId;
+    offline.close();
+    const provisionedClientId = "88888888-8888-4888-8888-888888888888";
+    const previous = {
+      dataRoot: process.env.AI_BENCHMARK_DATA_ROOT,
+      url: process.env.AI_BENCHMARK_SYNC_URL,
+      clientId: process.env.AI_BENCHMARK_SYNC_CLIENT_ID,
+      token: process.env.AI_BENCHMARK_SYNC_CLIENT_TOKEN,
+    };
+    process.env.AI_BENCHMARK_DATA_ROOT = dataRoot;
+    process.env.AI_BENCHMARK_SYNC_URL = "https://example.convex.site";
+    process.env.AI_BENCHMARK_SYNC_CLIENT_ID = provisionedClientId;
+    process.env.AI_BENCHMARK_SYNC_CLIENT_TOKEN = "ambient-token";
+    try {
+      const provisioned = openLocalStore();
+      expect(provisioned.clientId).toBe(provisionedClientId);
+      expect(provisioned.clientId).not.toBe(offlineClientId);
+      provisioned.close();
+    } finally {
+      for (const [key, value] of Object.entries({
+        AI_BENCHMARK_DATA_ROOT: previous.dataRoot,
+        AI_BENCHMARK_SYNC_URL: previous.url,
+        AI_BENCHMARK_SYNC_CLIENT_ID: previous.clientId,
+        AI_BENCHMARK_SYNC_CLIENT_TOKEN: previous.token,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("resolves the legacy repository database independently of the process working directory", () => {
     const originalWorkingDirectory = process.cwd();
     const unrelatedWorkingDirectory = temporaryRoot("unrelated-cwd");

@@ -749,7 +749,7 @@ export class SyncService {
           .run(artifact.artifact_digest, materializedPath, now, now);
       });
     } catch (error) {
-      if (replacedPath) {
+      if (replacedPath && staleMaterialization) {
         if (existsSync(stagingPath)) await rm(stagingPath, { recursive: true, force: true });
         if (installedReplacement && existsSync(materializedPath)) {
           await rename(
@@ -757,10 +757,24 @@ export class SyncService {
             join(dirname(materializedPath), `.${basename(materializedPath)}.failed-${randomUUID()}`),
           );
         }
+        const invalidateStaleTrust = () =>
+          store
+            .prepare(
+              "DELETE FROM artifact_materializations WHERE materialized_path = ? AND artifact_digest = ?",
+            )
+            .run(materializedPath, staleMaterialization.artifact_digest);
         if (!existsSync(materializedPath)) {
-          await rename(replacedPath, materializedPath);
+          try {
+            await rename(replacedPath, materializedPath);
+          } catch (restoreError) {
+            if (existsSync(materializedPath)) {
+              invalidateStaleTrust();
+            } else {
+              throw new AggregateError([error, restoreError], "Materialization and backup restoration both failed");
+            }
+          }
         } else {
-          store.prepare("DELETE FROM artifact_materializations WHERE materialized_path = ?").run(materializedPath);
+          invalidateStaleTrust();
         }
       }
       throw error;

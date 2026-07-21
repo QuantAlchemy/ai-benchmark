@@ -26,11 +26,16 @@ function databaseHasTable(database: DatabaseSync, name: string): boolean {
   return database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
 }
 
+function isTransientSqliteLock(error: unknown): boolean {
+  return error instanceof Error && /SQLITE_(?:BUSY|LOCKED)|database(?: table)? is (?:busy|locked)/i.test(error.message);
+}
+
 function reconcileDefaultOfflineIdentity(databasePath: string, provisionedClientId: string): void {
   // A default offline-only store may have used an automatic client id. Rebind it when first provisioned;
   // synchronized stores remain identity-bound and are rejected instead of silently changing ownership.
   const database = new DatabaseSync(databasePath);
   try {
+    database.exec("PRAGMA busy_timeout = 5000");
     if (!databaseHasTable(database, "local_identity")) return;
     const identity = database.prepare("SELECT client_id FROM local_identity WHERE singleton = 1").get() as
       | { client_id: string }
@@ -454,12 +459,12 @@ export function openLocalStore({
   }
   const provisionedClientId = clientId ?? (dataRoot === undefined ? config.credentials?.clientId : undefined);
   try {
-    if (legacyDataRoot !== undefined && provisionedClientId && existsSync(databasePath)) {
+    if (resolvedLegacyRoot !== null && provisionedClientId && existsSync(databasePath)) {
       reconcileDefaultOfflineIdentity(databasePath, provisionedClientId);
     }
     return new LocalStore(resolvedDataRoot, provisionedClientId);
   } catch (error) {
-    if (migratedDatabase) {
+    if (migratedDatabase && !isTransientSqliteLock(error)) {
       rmSync(databasePath, { force: true });
       rmSync(`${databasePath}-wal`, { force: true });
       rmSync(`${databasePath}-shm`, { force: true });
