@@ -22,6 +22,82 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   }
 }
 
+function databaseHasTable(database: DatabaseSync, name: string): boolean {
+  return database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+}
+
+function reconcileDefaultOfflineIdentity(databasePath: string, provisionedClientId: string): void {
+  // A default offline-only store may have used an automatic client id. Rebind it when first provisioned;
+  // synchronized stores remain identity-bound and are rejected instead of silently changing ownership.
+  const database = new DatabaseSync(databasePath);
+  try {
+    if (!databaseHasTable(database, "local_identity")) return;
+    const identity = database.prepare("SELECT client_id FROM local_identity WHERE singleton = 1").get() as
+      | { client_id: string }
+      | undefined;
+    if (!identity || identity.client_id === provisionedClientId) return;
+
+    let synchronizedState = false;
+    if (databaseHasTable(database, "sync_state")) {
+      synchronizedState =
+        database
+          .prepare("SELECT 1 FROM sync_state WHERE cursor IS NOT NULL OR last_sync_at IS NOT NULL LIMIT 1")
+          .get() !== undefined;
+    }
+    if (!synchronizedState && databaseHasTable(database, "benchmark_runs")) {
+      const columns = database.prepare("PRAGMA table_info(benchmark_runs)").all() as Array<{ name: string }>;
+      if (columns.some((column) => column.name === "sync_status")) {
+        synchronizedState =
+          database
+            .prepare("SELECT 1 FROM benchmark_runs WHERE sync_status IN ('remote', 'synced') LIMIT 1")
+            .get() !== undefined;
+      }
+    }
+    if (synchronizedState) {
+      throw new Error("Legacy data contains synchronized state and cannot be rebound to a different client identity");
+    }
+
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      database
+        .prepare("UPDATE local_identity SET client_id = ? WHERE singleton = 1 AND client_id = ?")
+        .run(provisionedClientId, identity.client_id);
+      if (databaseHasTable(database, "benchmark_runs")) {
+        const columns = database.prepare("PRAGMA table_info(benchmark_runs)").all() as Array<{ name: string }>;
+        if (columns.some((column) => column.name === "origin_client_id")) {
+          database
+            .prepare("UPDATE benchmark_runs SET origin_client_id = ? WHERE origin_client_id = ?")
+            .run(provisionedClientId, identity.client_id);
+        }
+      }
+      if (databaseHasTable(database, "sync_outbox")) {
+        const operations = database.prepare("SELECT operation_id, payload_json FROM sync_outbox").all() as Array<{
+          operation_id: string;
+          payload_json: string;
+        }>;
+        const updatePayload = database.prepare("UPDATE sync_outbox SET payload_json = ? WHERE operation_id = ?");
+        for (const operation of operations) {
+          const payload = parseJsonObject(operation.payload_json);
+          const run = payload.run;
+          if (run && typeof run === "object" && !Array.isArray(run)) {
+            const runPayload = run as Record<string, unknown>;
+            if (runPayload.originClientId === identity.client_id) {
+              runPayload.originClientId = provisionedClientId;
+              updatePayload.run(JSON.stringify(payload), operation.operation_id);
+            }
+          }
+        }
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  } finally {
+    database.close();
+  }
+}
+
 export class LocalStore {
   readonly clientId: string;
   readonly principalId: string;
@@ -349,6 +425,7 @@ export function openLocalStore({
       : null;
   const databasePath = join(resolvedDataRoot, LOCAL_DATABASE_FILENAME);
   const legacyDatabasePath = resolvedLegacyRoot ? join(resolvedLegacyRoot, LOCAL_DATABASE_FILENAME) : null;
+  let migratedDatabase = false;
   if (
     legacyDatabasePath &&
     legacyDatabasePath !== databasePath &&
@@ -368,11 +445,25 @@ export function openLocalStore({
     }
     try {
       linkSync(temporaryDatabasePath, databasePath);
+      migratedDatabase = true;
     } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
     } finally {
       rmSync(temporaryDatabasePath, { force: true });
     }
   }
-  return new LocalStore(resolvedDataRoot, clientId ?? (dataRoot === undefined ? config.credentials?.clientId : undefined));
+  const provisionedClientId = clientId ?? (dataRoot === undefined ? config.credentials?.clientId : undefined);
+  try {
+    if (legacyDataRoot !== undefined && provisionedClientId && existsSync(databasePath)) {
+      reconcileDefaultOfflineIdentity(databasePath, provisionedClientId);
+    }
+    return new LocalStore(resolvedDataRoot, provisionedClientId);
+  } catch (error) {
+    if (migratedDatabase) {
+      rmSync(databasePath, { force: true });
+      rmSync(`${databasePath}-wal`, { force: true });
+      rmSync(`${databasePath}-shm`, { force: true });
+    }
+    throw error;
+  }
 }

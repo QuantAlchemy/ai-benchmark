@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateRunPush } from "../../../convex/protocol";
 import { createRunHistoryStore } from "../run-history.server";
 import { createScorecardData } from "../scorecard";
+import * as artifactModule from "./artifacts.server";
 import { packageSolutionArtifact, type PackagedSolutionArtifact } from "./artifacts.server";
 import { openLocalStore } from "./local-store.server";
 import { discardSyncOperation, getFailedSyncOperations, retrySyncOperation } from "./sync-runtime.server";
@@ -28,6 +29,7 @@ async function temporaryRoot(prefix: string) {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -367,6 +369,47 @@ describe("offline-first synchronization service", () => {
     const historyAfter = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
     expect(historyAfter.listBenchmarkRuns()).toHaveLength(1);
     historyAfter.close();
+  });
+
+  it("preserves a concurrently created destination when replacement materialization fails", async () => {
+    const projectRootA = await temporaryRoot("sync-rollback-race-project-a-");
+    const projectRootB = await temporaryRoot("sync-rollback-race-project-b-");
+    const dataRootA = await temporaryRoot("sync-rollback-race-data-a-");
+    const dataRootB = await temporaryRoot("sync-rollback-race-data-b-");
+    const sourcePath = await createSolution(projectRootA, "rollback-race");
+    const runA = createRun(dataRootA, projectRootA, sourcePath);
+    const backend = new MemoryTransport();
+    const replicaA = new SyncService({ dataRoot: dataRootA, projectRoot: projectRootA, transport: backend });
+    const replicaB = new SyncService({ dataRoot: dataRootB, projectRoot: projectRootB, transport: backend });
+
+    expect(await replicaA.syncOnce({ force: true })).toMatchObject({ pushed: 1, errors: [] });
+    expect(await replicaB.syncOnce({ force: true })).toMatchObject({ pulled: 1, materialized: 1, errors: [] });
+    const historyBefore = createRunHistoryStore({ dataRoot: dataRootB, projectRoot: projectRootB });
+    const destination = historyBefore.listBenchmarkRuns()[0]!.solutionPath;
+    historyBefore.close();
+
+    await writeFile(join(sourcePath, "dist", "index.html"), "<!doctype html><title>replacement</title>\n");
+    createRun(dataRootA, projectRootA, sourcePath);
+    expect(await replicaA.syncOnce({ force: true })).toMatchObject({ pushed: 1, errors: [] });
+    const updatedEvent = backend.events.at(-1)!;
+    const updatedPayload = JSON.parse(updatedEvent.payloadJson) as { run: { runUid: string } };
+    updatedPayload.run.runUid = runA.runUid;
+    updatedEvent.runUid = runA.runUid;
+    updatedEvent.payloadJson = JSON.stringify(updatedPayload);
+    vi.spyOn(artifactModule, "materializeSolutionArtifact").mockImplementation(async () => {
+      await mkdir(destination, { recursive: true });
+      await writeFile(join(destination, "independent.txt"), "created by another writer");
+      throw new Error("injected extraction failure");
+    });
+
+    const failed = await replicaB.syncOnce({ force: true });
+
+    expect(failed.errors.join("\n")).toContain("injected extraction failure");
+    expect(await readFile(join(destination, "independent.txt"), "utf8")).toBe("created by another writer");
+    const replacementEntries = await readdir(dirname(destination));
+    const backup = replacementEntries.find((entry) => entry.startsWith(`.${basename(destination)}.replaced-`));
+    expect(backup).toBeDefined();
+    expect(await readFile(join(dirname(destination), backup!, "dist", "index.html"), "utf8")).toContain("synced");
   });
 
   it("does not dead-letter queued operations while remote preflight is offline", async () => {

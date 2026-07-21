@@ -704,16 +704,27 @@ export class SyncService {
           `.${basename(materializedPath)}.replaced-${staleMaterialization.artifact_digest.slice(0, 12)}-${randomUUID()}`,
         )
       : null;
-    // Intentional: preserve the prior verified tree as a sibling backup. It may contain local edits,
-    // so deleting it automatically would turn a remote digest update into a data-loss path.
+    const stagingPath = replacedPath
+      ? join(dirname(materializedPath), `.${basename(materializedPath)}.materializing-${randomUUID()}`)
+      : materializedPath;
+    let installedReplacement = false;
+    // Intentional: stage replacements separately and preserve the prior verified tree as a sibling backup.
+    // It may contain local edits, and rollback must never delete a destination installed by another writer.
     if (replacedPath) await rename(materializedPath, replacedPath);
 
     try {
       await materializeSolutionArtifact({
         artifactPath: artifact.archive_path,
         expectedArtifactSha256: artifact.artifact_digest,
-        destinationDir: materializedPath,
+        destinationDir: stagingPath,
       });
+      if (replacedPath) {
+        if (existsSync(materializedPath)) {
+          throw new Error(`Materialization destination changed while replacing ${materializedPath}`);
+        }
+        await rename(stagingPath, materializedPath);
+        installedReplacement = true;
+      }
       const now = new Date().toISOString();
       store.transaction(() => {
         store.prepare("UPDATE benchmark_runs SET sync_status = 'synced' WHERE id = ?").run(run.id);
@@ -739,8 +750,18 @@ export class SyncService {
       });
     } catch (error) {
       if (replacedPath) {
-        await rm(materializedPath, { recursive: true, force: true });
-        await rename(replacedPath, materializedPath);
+        if (existsSync(stagingPath)) await rm(stagingPath, { recursive: true, force: true });
+        if (installedReplacement && existsSync(materializedPath)) {
+          await rename(
+            materializedPath,
+            join(dirname(materializedPath), `.${basename(materializedPath)}.failed-${randomUUID()}`),
+          );
+        }
+        if (!existsSync(materializedPath)) {
+          await rename(replacedPath, materializedPath);
+        } else {
+          store.prepare("DELETE FROM artifact_materializations WHERE materialized_path = ?").run(materializedPath);
+        }
       }
       throw error;
     }

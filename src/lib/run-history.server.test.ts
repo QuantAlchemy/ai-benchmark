@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { validateRunPush } from "../../convex/protocol";
 import { createScorecardData } from "./scorecard";
 import { createRunHistoryStore } from "./run-history.server";
+import { openLocalStore } from "./sync/local-store.server";
 import { getSyncStatus } from "./sync/sync-runtime.server";
 
 const temporaryRoots: string[] = [];
@@ -51,6 +52,95 @@ describe("run history sync outbox", () => {
     const imported = new DatabaseSync(join(dataRoot, "benchmark-history.sqlite"), { readOnly: true });
     expect(imported.prepare("SELECT value FROM marker").get()).toEqual({ value: "legacy" });
     imported.close();
+  });
+
+  it("rebinds an unprovisioned legacy identity when the default data root is provisioned", () => {
+    const dataRoot = temporaryRoot();
+    const projectRoot = temporaryRoot();
+    const legacyDataRoot = temporaryRoot();
+    const legacyHistory = createRunHistoryStore({ dataRoot: legacyDataRoot, projectRoot });
+    legacyHistory.createBenchmarkRun(runInput(projectRoot));
+    legacyHistory.close();
+    const provisionedClientId = "55555555-5555-4555-8555-555555555555";
+    writeFileSync(
+      join(projectRoot, ".env"),
+      [
+        `AI_BENCHMARK_DATA_ROOT=${dataRoot}`,
+        "AI_BENCHMARK_SYNC_URL=https://example.convex.site",
+        `AI_BENCHMARK_SYNC_CLIENT_ID=${provisionedClientId}`,
+        "AI_BENCHMARK_SYNC_CLIENT_TOKEN=server-only-token",
+        "",
+      ].join("\n"),
+    );
+
+    const migrated = createRunHistoryStore({ projectRoot, legacyDataRoot });
+    const [run] = migrated.listBenchmarkRuns();
+    migrated.close();
+
+    expect(run?.originClientId).toBe(provisionedClientId);
+    const imported = new DatabaseSync(join(dataRoot, "benchmark-history.sqlite"), { readOnly: true });
+    expect(imported.prepare("SELECT client_id FROM local_identity WHERE singleton = 1").get()).toEqual({
+      client_id: provisionedClientId,
+    });
+    const queued = imported.prepare("SELECT payload_json FROM sync_outbox").all() as Array<{ payload_json: string }>;
+    expect(queued).not.toHaveLength(0);
+    expect(queued.every(({ payload_json }) => JSON.parse(payload_json).run.originClientId === provisionedClientId)).toBe(true);
+    imported.close();
+  });
+
+  it("reconciles a default offline store when credentials are provisioned after its first open", () => {
+    const dataRoot = temporaryRoot();
+    const projectRoot = temporaryRoot();
+    writeFileSync(join(projectRoot, ".env"), `AI_BENCHMARK_DATA_ROOT=${dataRoot}\n`);
+    const offlineHistory = createRunHistoryStore({ projectRoot });
+    offlineHistory.createBenchmarkRun(runInput(projectRoot));
+    offlineHistory.close();
+    const provisionedClientId = "55555555-5555-4555-8555-555555555555";
+    writeFileSync(
+      join(projectRoot, ".env"),
+      [
+        `AI_BENCHMARK_DATA_ROOT=${dataRoot}`,
+        "AI_BENCHMARK_SYNC_URL=https://example.convex.site",
+        `AI_BENCHMARK_SYNC_CLIENT_ID=${provisionedClientId}`,
+        "AI_BENCHMARK_SYNC_CLIENT_TOKEN=server-only-token",
+        "",
+      ].join("\n"),
+    );
+
+    const provisioned = createRunHistoryStore({ projectRoot });
+    const [run] = provisioned.listBenchmarkRuns();
+    provisioned.close();
+
+    expect(run?.originClientId).toBe(provisionedClientId);
+  });
+
+  it("keeps a previously synchronized legacy identity bound and removes the rejected copy", () => {
+    const dataRoot = temporaryRoot();
+    const projectRoot = temporaryRoot();
+    const legacyDataRoot = temporaryRoot();
+    const legacy = openLocalStore({
+      dataRoot: legacyDataRoot,
+      clientId: "44444444-4444-4444-8444-444444444444",
+    });
+    legacy
+      .prepare(
+        "UPDATE sync_state SET cursor = '5', last_sync_at = '2026-01-01T00:00:00.000Z' WHERE scope = 'remote'",
+      )
+      .run();
+    legacy.close();
+    writeFileSync(
+      join(projectRoot, ".env"),
+      [
+        `AI_BENCHMARK_DATA_ROOT=${dataRoot}`,
+        "AI_BENCHMARK_SYNC_URL=https://example.convex.site",
+        "AI_BENCHMARK_SYNC_CLIENT_ID=55555555-5555-4555-8555-555555555555",
+        "AI_BENCHMARK_SYNC_CLIENT_TOKEN=server-only-token",
+        "",
+      ].join("\n"),
+    );
+
+    expect(() => createRunHistoryStore({ projectRoot, legacyDataRoot })).toThrow("synchronized state");
+    expect(existsSync(join(dataRoot, "benchmark-history.sqlite"))).toBe(false);
   });
 
   it("imports the legacy repository database through the sync-status entry point", async () => {
