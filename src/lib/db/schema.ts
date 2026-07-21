@@ -5,6 +5,8 @@ import type { ScorecardData } from "../scorecard";
 
 export const benchmarkRuns = sqliteTable("benchmark_runs", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  runUid: text("run_uid").notNull().unique(),
+  originClientId: text("origin_client_id").notNull(),
   benchmarkId: text("benchmark_id").notNull(),
   benchmarkName: text("benchmark_name").notNull(),
   agentId: text("agent_id"),
@@ -13,6 +15,9 @@ export const benchmarkRuns = sqliteTable("benchmark_runs", {
   serviceTier: text("service_tier"),
   runDurationMs: integer("run_duration_ms"),
   solutionPath: text("solution_path").notNull(),
+  solutionRelPath: text("solution_rel_path"),
+  artifactDigest: text("artifact_digest"),
+  syncStatus: text("sync_status").notNull().default("pending"),
   scoreModel: text("score_model").notNull(),
   scorecardPath: text("scorecard_path"),
   scorecardContent: text("scorecard_content").notNull().default(""),

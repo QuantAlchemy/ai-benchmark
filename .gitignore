@@ -2,6 +2,12 @@ node_modules/
 dist/
 .tanstack/
 
+# Local credentials and deployment selection
+.env
+.env.*
+!.env.example
+!.env.local.tpl
+
 # Local runtime state
 data/
 *.sqlite

@@ -30,6 +30,7 @@ import {
   supportsAgentReasoning,
   type AgentModelOption,
 } from "@/lib/agent-options";
+import { getSyncPresentation } from "@/lib/sync/status-presentation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,9 +45,11 @@ import {
   loadBenchmarkRuns,
   loadBenchmarkSolutionEntries,
   loadDashboard,
+  loadSyncStatus,
   removeSolutionEntryAction,
   runBenchmarkAgentAction,
   runBenchmarkAction,
+  runSyncAction,
   saveBenchmarkRunAction,
   stopSolutionAction,
 } from "@/lib/benchmarks.functions";
@@ -82,12 +85,15 @@ const RUN_LABELS: Record<Exclude<ActiveRun, null>, string> = {
 
 export const Route = createFileRoute("/")({
   loader: async () => {
-    const benchmarks = await loadDashboard();
-    const agents = await loadBenchmarkAgents();
+    const [benchmarks, agents, syncStatus] = await Promise.all([
+      loadDashboard(),
+      loadBenchmarkAgents(),
+      loadSyncStatus(),
+    ]);
     const initialFiles = benchmarks[0] ? await loadBenchmarkFiles({ data: { id: benchmarks[0].id } }) : null;
     const initialRuns = benchmarks[0] ? await loadBenchmarkRuns({ data: { id: benchmarks[0].id } }) : [];
     const initialSolutionEntries = benchmarks[0] ? await loadBenchmarkSolutionEntries({ data: { id: benchmarks[0].id } }) : [];
-    return { benchmarks, agents, initialFiles, initialRuns, initialSolutionEntries };
+    return { benchmarks, agents, syncStatus, initialFiles, initialRuns, initialSolutionEntries };
   },
   component: BenchmarkDashboard,
 });
@@ -99,6 +105,8 @@ function BenchmarkDashboard() {
   const initialSolutionEntry = loaded.initialSolutionEntries[0] ?? null;
   const [benchmarks, setBenchmarks] = React.useState<DashboardBenchmark[]>(loadedBenchmarks);
   const [agents, setAgents] = React.useState<BenchmarkAgent[]>(loadedAgents);
+  const [syncStatus, setSyncStatus] = React.useState(loaded.syncStatus);
+  const [syncing, setSyncing] = React.useState(false);
   const [selectedId, setSelectedId] = React.useState(loadedBenchmarks[0]?.id ?? "");
   const selectedBenchmark = benchmarks.find((benchmark) => benchmark.id === selectedId) ?? benchmarks[0];
   const [agentId, setAgentId] = React.useState(loadedAgents.find((agent) => agent.available)?.id ?? loadedAgents[0]?.id ?? "codex");
@@ -125,6 +133,7 @@ function BenchmarkDashboard() {
 
   React.useEffect(() => setBenchmarks(loadedBenchmarks), [loadedBenchmarks]);
   React.useEffect(() => setAgents(loadedAgents), [loadedAgents]);
+  React.useEffect(() => setSyncStatus(loaded.syncStatus), [loaded.syncStatus]);
 
   React.useEffect(() => {
     if (!selectedBenchmark) return;
@@ -197,10 +206,29 @@ function BenchmarkDashboard() {
 
   async function refreshDashboard() {
     setActiveRun("refresh");
-    const [nextBenchmarks, nextAgents] = await Promise.all([loadDashboard(), loadBenchmarkAgents()]);
+    const [nextBenchmarks, nextAgents, nextSyncStatus] = await Promise.all([
+      loadDashboard(),
+      loadBenchmarkAgents(),
+      loadSyncStatus(),
+    ]);
     setBenchmarks(nextBenchmarks);
     setAgents(nextAgents);
+    setSyncStatus(nextSyncStatus);
     setActiveRun(null);
+  }
+
+  async function synchronizeDashboard() {
+    if (!syncStatus.configured) return;
+    setSyncing(true);
+    try {
+      await runSyncAction();
+      const [nextStatus] = await Promise.all([loadSyncStatus(), refreshRunHistory()]);
+      setSyncStatus(nextStatus);
+    } catch {
+      setSyncStatus(await loadSyncStatus());
+    } finally {
+      setSyncing(false);
+    }
   }
 
   async function refreshRunHistory() {
@@ -413,6 +441,7 @@ function BenchmarkDashboard() {
   }
 
   const running = activeRun !== null;
+  const { label: syncLabel, variant: syncVariant } = getSyncPresentation(syncStatus);
   const selectedAgent = agents.find((agent) => agent.id === agentId) ?? agents[0];
   const agentModelOptions: AgentModelOption[] = selectedAgent?.models?.length
     ? selectedAgent.models
@@ -463,7 +492,25 @@ function BenchmarkDashboard() {
               Setup, agent execution, solution verification, rubrics, and scorecards for benchmark runs.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              variant={syncVariant}
+              className="h-8 gap-1.5 px-3"
+              title={syncStatus.lastError ?? `Remote cursor ${syncStatus.cursor}; last sync ${syncStatus.lastSyncAt ?? "never"}`}
+            >
+              <Database className="size-3.5" aria-hidden="true" />
+              {syncLabel}
+            </Badge>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={synchronizeDashboard}
+              disabled={running || syncing || !syncStatus.configured}
+              title={syncStatus.configured ? "Push queued changes and pull remote runs" : "Remote sync is not configured"}
+            >
+              <RefreshCw className={cn("size-4", syncing && "animate-spin")} aria-hidden="true" />
+              Sync
+            </Button>
             <Button variant="outline" size="sm" asChild>
               <Link to="/plot">
                 <LineChart className="size-4" aria-hidden="true" />

@@ -16,9 +16,39 @@ import {
   stopBenchmarkSolution,
 } from "./benchmarks.server";
 import type { ScorecardData } from "./scorecard";
+import { readServerSyncConfig } from "./sync/config.server";
+import { getSyncStatus, syncNow } from "./sync/sync-runtime.server";
 
 export const loadDashboard = createServerFn({ method: "GET" }).handler(() => {
   return getDashboardData();
+});
+
+export const loadSyncStatus = createServerFn({ method: "GET" }).handler(async () => {
+  try {
+    const status = await getSyncStatus();
+    return {
+      configured: status.configured,
+      pendingOperations: status.pendingOperations,
+      failedOperations: status.failedOperations,
+      cursor: status.cursor,
+      lastSyncAt: status.lastSyncAt,
+      lastError: status.lastError,
+    };
+  } catch (error) {
+    const config = readServerSyncConfig();
+    return {
+      configured: config.credentials !== null,
+      pendingOperations: 0,
+      failedOperations: 0,
+      cursor: "0",
+      lastSyncAt: null,
+      lastError: error instanceof Error ? error.message : "Unable to inspect synchronization status",
+    };
+  }
+});
+
+export const runSyncAction = createServerFn({ method: "POST" }).handler(async () => {
+  return await syncNow();
 });
 
 export const loadBenchmarkAgents = createServerFn({ method: "GET" }).handler(() => {

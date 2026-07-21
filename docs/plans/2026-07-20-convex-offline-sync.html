@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Benchmark Convex Offline Sync Implementation Plan</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, system-ui, sans-serif; line-height: 1.55; }
+    body { max-width: 1100px; margin: 0 auto; padding: 2rem; }
+    h1, h2, h3 { line-height: 1.2; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, monospace; }
+    pre { overflow-x: auto; padding: 1rem; border: 1px solid #8885; border-radius: .5rem; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { padding: .6rem; border: 1px solid #8885; text-align: left; vertical-align: top; }
+    .callout { padding: 1rem; border-left: 4px solid #5b8cff; background: #5b8cff12; }
+    .gate { border-left-color: #ef9b35; background: #ef9b3512; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI Benchmark Convex Offline Sync Implementation Plan</h1>
+    <p><strong>Goal:</strong> Make benchmark runs and complete generated solutions available across local clones while preserving durable offline operation and automatic synchronization through Convex.</p>
+    <p><strong>Architecture:</strong> Each OS user keeps a private SQLite replica and durable outbox. A dedicated Convex production deployment stores authenticated, append-only run snapshots/events and chunked solution artifacts in Convex File Storage. Launch and Verify automatically hydrate missing solutions from the local artifact cache or Convex.</p>
+    <p><strong>Tech stack:</strong> Node.js 24+, TypeScript, node:sqlite, Convex 1.42.3, Convex File Storage, Vitest, tar archives, SHA-256, React Router/TanStack Start.</p>
+    <p class="callout"><strong>Execution:</strong> Use strict RED–GREEN–REFACTOR for production behavior. Run a spec-compliance review and code-quality/security review before the final Quant Alchemy quality gate and PR.</p>
+  </header>
+
+  <section>
+    <h2>Acceptance criteria</h2>
+    <ol>
+      <li>A run created without network access survives app restart in local SQLite.</li>
+      <li>Reconnect pushes queued operations idempotently to Convex.</li>
+      <li>A second independent replica pulls the run and complete solution artifact.</li>
+      <li>After disconnecting again, the second replica can materialize and launch the synchronized solution.</li>
+      <li>Launch and Verify hydrate missing paths automatically rather than requiring rsync.</li>
+      <li>Multiple users on one host are distinguished by stable client UUIDs and private aliases.</li>
+      <li>Convex endpoints reject unauthenticated clients; secrets and identities are absent from Git.</li>
+      <li>Archive creation excludes credentials/caches and extraction rejects traversal, unsafe links, corruption, and size violations.</li>
+      <li>Existing SQLite rows migrate idempotently and remain usable.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Task sequence</h2>
+    <table>
+      <thead><tr><th>#</th><th>Task</th><th>Primary files</th><th>Verification</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Test harness and configuration safety</td><td><code>package.json</code>, <code>pnpm-lock.yaml</code>, <code>vitest.config.ts</code>, <code>.gitignore</code>, <code>.env.example</code></td><td>Vitest runs; build remains green; env files ignored.</td></tr>
+        <tr><td>2</td><td>Stable client identity, local data paths, SQLite migrations, outbox, artifacts, and sync state</td><td><code>src/lib/sync/config.server.ts</code>, <code>src/lib/sync/local-store.server.ts</code>, <code>src/lib/run-history.server.ts</code>, <code>src/lib/db/schema.ts</code></td><td>Two data roots on one host produce distinct clients; legacy rows migrate; writes queue atomically.</td></tr>
+        <tr><td>3</td><td>Secure deterministic artifact packaging, chunking, integrity verification, and atomic materialization</td><td><code>src/lib/sync/artifacts.server.ts</code>, artifact tests</td><td>Round-trip equality; secret exclusions; corrupt/traversal archives rejected; missing solutions restored.</td></tr>
+        <tr><td>4</td><td>Convex schema, authenticated HTTP routes, idempotent push/pull, and chunk storage</td><td><code>convex/schema.ts</code>, <code>convex/sync.ts</code>, <code>convex/http.ts</code>, generated bindings</td><td>Unauthorized requests return 401; duplicate operations do not duplicate data; cursored pulls converge.</td></tr>
+        <tr><td>5</td><td>Server-side synchronization worker and status model</td><td><code>src/lib/sync/convex-client.server.ts</code>, <code>src/lib/sync/service.server.ts</code></td><td>Offline failures remain queued; reconnect uploads artifact then metadata; pull prefetches artifacts.</td></tr>
+        <tr><td>6</td><td>Integrate run mutations and automatic Launch/Verify hydration</td><td><code>src/lib/run-history.server.ts</code>, <code>src/lib/benchmarks.server.ts</code>, <code>src/lib/benchmarks.functions.ts</code></td><td>All creates/updates/deletes enqueue; missing run solution is restored before command execution.</td></tr>
+        <tr><td>7</td><td>Sync status and manual retry diagnostic without making normal use manual</td><td><code>src/routes/index.tsx</code>, server functions, optional CLI diagnostic</td><td>UI reports local/offline/syncing/pending/error and retries; ordinary use remains automatic.</td></tr>
+        <tr><td>8</td><td>Legacy import and two-replica end-to-end validation</td><td><code>scripts/validate-convex-sync.mjs</code>, integration tests</td><td>Offline create → restart → push → second replica pull → network off → materialize → Launch/Verify.</td></tr>
+        <tr><td>9</td><td>Credential provisioning, documentation, security review, and PR</td><td><code>README.md</code>, <code>.env.example</code>, 1Password items</td><td>No secrets in diff/history; 1Password readback succeeds; build/tests/runtime pass; QA score 100/100 target.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>TDD workflow for each production task</h2>
+    <ol>
+      <li>Write one focused failing test for the next observable behavior.</li>
+      <li>Run only that test and confirm it fails for the missing behavior.</li>
+      <li>Implement the minimum code to make it pass.</li>
+      <li>Run the focused test, then the complete test suite and build.</li>
+      <li>Refactor only while green.</li>
+    </ol>
+    <pre>pnpm test -- --run tests/path/to/focused.test.ts
+pnpm test
+pnpm exec tsc --noEmit
+pnpm build</pre>
+  </section>
+
+  <section>
+    <h2>Data and conflict model</h2>
+    <ul>
+      <li><strong>Identity:</strong> opaque client UUID plus private alias; no automatic raw username/hostname upload.</li>
+      <li><strong>Runs:</strong> stable <code>run_uid</code> in addition to the local numeric primary key.</li>
+      <li><strong>Operations:</strong> application-generated UUIDs and idempotent server insertion.</li>
+      <li><strong>Artifacts:</strong> immutable content digest, manifest, fixed-size chunks, and per-chunk digest.</li>
+      <li><strong>Changes:</strong> append-only server sequence for reliable cursored pull.</li>
+      <li><strong>Deletes:</strong> tombstone events rather than immediate remote destruction.</li>
+      <li><strong>Mutable fields:</strong> deterministic event order with all source events retained for audit.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Security gates</h2>
+    <div class="callout gate">
+      <ul>
+        <li>All sync HTTP actions require a per-client bearer token stored only as a hash in Convex.</li>
+        <li>Administrative provisioning requires a separate secret stored in Convex environment variables and 1Password.</li>
+        <li>Browser code never receives deployment keys, admin secrets, or client credentials.</li>
+        <li>Direct Convex storage URLs are not exposed; authenticated routes serve bounded chunks.</li>
+        <li>Bundle paths are relative, normalized, and allowlisted; <code>.env*</code>, <code>.git</code>, dependency caches, auth files, sockets, and device files are excluded.</li>
+        <li>Extraction uses a temporary directory, validates every member, verifies hashes and limits, then atomically renames.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>Deployment and validation</h2>
+    <ol>
+      <li>Deploy to the dedicated private synchronization production deployment.</li>
+      <li>Provision approved installation identities and store their client credentials plus the admin secret in a private credential manager.</li>
+      <li>Run integration validation with two isolated data roots and client credentials.</li>
+      <li>Disable network access to the sync endpoint and prove local reads, writes, restart survival, materialization, and launch.</li>
+      <li>Restore access and prove automatic convergence and zero pending outbox records.</li>
+      <li>Export/backup the Convex deployment after successful validation.</li>
+    </ol>
+  </section>
+</body>
+</html>
