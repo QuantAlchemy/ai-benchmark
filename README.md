@@ -222,5 +222,8 @@ The dashboard header shows `offline only`, `not yet synchronized`, queued/failed
 `sync error`, or `synced`; dead-lettered entries require the CLI remediation commands above. Launch
 and Verify call the same ensure-local operation: a remote solution
 artifact is downloaded, SHA-256 verified, safely extracted, and atomically materialized before
-execution. Artifacts use a strict source allowlist and reject links, traversal, auth files,
-unsafe archive entries, digest mismatches, and overwrite attempts.
+execution. Dependency directories remain excluded from portable artifacts; direct Launch reconstructs
+missing JavaScript dependencies with the candidate lockfile (`npm ci`, frozen pnpm/yarn install), or
+uses a non-locking pnpm fallback when no lockfile exists, before starting the package script. Artifacts
+use a strict source allowlist and reject links, traversal, auth files, unsafe archive entries, digest
+mismatches, and overwrite attempts.

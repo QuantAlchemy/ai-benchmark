@@ -24,6 +24,7 @@ import {
 } from "./run-history.server";
 import type { BenchmarkRun } from "./db/schema";
 import { emptyRunMetrics, type RunMetrics, type SolutionSizeMetrics } from "./metrics";
+import { ensurePackageDependencies } from "./package-dependencies.server";
 import { createScorecardData, renderScorecardMarkdown, type ScorecardData } from "./scorecard";
 import { ensureRunSolution, startSyncWorker } from "./sync/sync-runtime.server";
 
@@ -625,6 +626,8 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
     HOST: process.env.HOST ?? "127.0.0.1",
     PORT: String(port),
   };
+  const startedAt = Date.now();
+  let dependencyPreparationCommand: string | null = null;
 
   if (manifestLaunch) {
     const scriptPath = join(benchmark.dir, manifestLaunch);
@@ -640,8 +643,21 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
         ok: false,
         exitCode: 2,
         command: "launch",
-        durationMs: 0,
+        durationMs: Date.now() - startedAt,
         output: `No launch script found in ${join(solutionPath, "package.json")}.\nExpected one of: preview, start, serve, dev.`,
+      };
+    }
+    try {
+      const preparation = await ensurePackageDependencies(solutionPath);
+      dependencyPreparationCommand = preparation.command;
+    } catch (error) {
+      return {
+        ok: false,
+        exitCode: 1,
+        command: "prepare dependencies",
+        durationMs: Date.now() - startedAt,
+        output: error instanceof Error ? error.message : String(error),
+        solutionPath,
       };
     }
     const packageManager = detectPackageManager(solutionPath);
@@ -663,7 +679,6 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
     };
   }
 
-  const startedAt = Date.now();
   const logsDir = join(ROOT, "data", "launch-logs");
   mkdirSync(logsDir, { recursive: true });
   const logPath = join(logsDir, `${benchmark.id}-${Date.now()}.log`);
@@ -712,7 +727,14 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
       exitCode,
       command: displayCommand,
       durationMs: Date.now() - startedAt,
-      output: [`Launch command exited early with code ${exitCode}.`, `Log: ${logPath}`, log].filter(Boolean).join("\n\n"),
+      output: [
+        dependencyPreparationCommand ? `Prepared dependencies with: ${dependencyPreparationCommand}` : "",
+        `Launch command exited early with code ${exitCode}.`,
+        `Log: ${logPath}`,
+        log,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     };
   }
 
@@ -747,6 +769,7 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
     command: `${displayCommand} (pid ${child.pid})`,
     durationMs: Date.now() - startedAt,
     output: [
+      dependencyPreparationCommand ? `Prepared dependencies with: ${dependencyPreparationCommand}` : "",
       `Started solution from: ${solutionPath}`,
       detectedUrl ? (responded ? `URL: ${detectedUrl}` : `URL candidate: ${detectedUrl} (no HTTP response confirmed yet)`) : "",
       `PID: ${child.pid}`,

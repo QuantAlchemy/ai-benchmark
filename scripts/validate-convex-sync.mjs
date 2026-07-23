@@ -127,10 +127,17 @@ async function mockFetch(input, init = {}) {
 async function createSolution() {
   const solution = join(projectRootA, "solutions", "voidbreaker", "acceptance-run");
   await mkdir(join(solution, "src"), { recursive: true });
+  await mkdir(join(solution, "sync-fixture"), { recursive: true });
   await writeFile(join(solution, "src", "main.js"), "export const synchronized = true;\n");
+  await writeFile(
+    join(solution, "sync-fixture", "package.json"),
+    JSON.stringify({ name: "sync-fixture", version: "1.0.0", main: "index.js" }),
+  );
+  await writeFile(join(solution, "sync-fixture", "index.js"), "module.exports = true;\n");
   await writeFile(
     join(solution, "package.json"),
     JSON.stringify({
+      dependencies: { "sync-fixture": "file:./sync-fixture" },
       scripts: {
         build:
           "node -e \"const f=require('fs');f.mkdirSync('dist',{recursive:true});f.writeFileSync('dist/index.html','<!doctype html><title>synced</title>')\"",
@@ -208,13 +215,16 @@ try {
     import.meta.url,
   );
   stopLaunch = stopBenchmarkSolution;
-  const verified = await runBenchmarkScript("voidbreaker", "verify", undefined, runB.id);
-  if (!verified.ok) throw new Error(`Verify failed after synchronization: ${verified.output}`);
   const launched = await launchBenchmarkSolution("voidbreaker", undefined, runB.id);
-  if (!launched.ok || !launched.url) throw new Error(`Launch failed after synchronization: ${launched.output}`);
+  if (!launched.ok || !launched.url) throw new Error(`Direct launch failed after synchronization: ${launched.output}`);
+  if (!launched.output.includes("Prepared dependencies with: pnpm install --lockfile=false")) {
+    throw new Error("Direct launch did not reconstruct omitted package dependencies");
+  }
   const stopped = await stopBenchmarkSolution("voidbreaker", runB.solutionPath);
   if (!stopped.ok) throw new Error(`Unable to stop acceptance launch: ${stopped.output}`);
   launchedSolution = undefined;
+  const verified = await runBenchmarkScript("voidbreaker", "verify", undefined, runB.id);
+  if (!verified.ok) throw new Error(`Verify failed after synchronization: ${verified.output}`);
 
   console.log(
     JSON.stringify({
