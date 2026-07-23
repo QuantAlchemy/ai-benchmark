@@ -88,7 +88,7 @@ const PORTABLE_FILE_EXTENSIONS = new Set([
   ".lua", ".m4a", ".map", ".md", ".mjs", ".mp3", ".mp4", ".mtl", ".obj", ".ogg", ".otf", ".php",
   ".png", ".ps1", ".py", ".rb", ".rs", ".sass", ".scss", ".sh", ".svg", ".toml", ".ts", ".tsx",
   ".ttf", ".txt", ".vert", ".wasm", ".wav", ".webm", ".webmanifest", ".webp", ".wgsl", ".woff",
-  ".woff2", ".xml", ".yaml", ".yml", ".zsh",
+  ".woff2", ".xcf", ".xml", ".yaml", ".yml", ".zsh",
 ]);
 
 const PORTABLE_EXTENSIONLESS_FILES = new Set([

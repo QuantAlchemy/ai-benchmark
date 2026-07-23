@@ -181,6 +181,20 @@ describe("solution artifacts", () => {
     ]);
   });
 
+  it("packages editable GIMP source assets used by creative benchmark solutions", async () => {
+    const root = await makeTempDir("artifact-xcf-");
+    const solutionDir = join(root, "solution");
+    await mkdir(join(solutionDir, "assets"), { recursive: true });
+    await writeFile(join(solutionDir, "assets", "buttons.xcf"), Buffer.from("gimp-source"));
+
+    const packaged = await packageSolutionArtifact({
+      solutionDir,
+      artifactPath: join(root, "artifact.tar.gz"),
+    });
+
+    expect(packaged.manifest.files.map((file) => file.path)).toEqual(["assets/buttons.xcf"]);
+  });
+
   it("fails closed for unknown file types and secret-bearing portable files", async () => {
     const root = await makeTempDir("artifact-allowlist-");
     const solutionDir = join(root, "solution");
