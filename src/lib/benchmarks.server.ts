@@ -24,13 +24,17 @@ import {
 } from "./run-history.server";
 import type { BenchmarkRun } from "./db/schema";
 import { emptyRunMetrics, type RunMetrics, type SolutionSizeMetrics } from "./metrics";
+import { ensurePackageDependencies } from "./package-dependencies.server";
 import { createScorecardData, renderScorecardMarkdown, type ScorecardData } from "./scorecard";
+import { ensureRunSolution, startSyncWorker } from "./sync/sync-runtime.server";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const BENCHMARKS_DIR = join(ROOT, "benchmarks");
 const SOLUTIONS_DIR = join(ROOT, "solutions");
 const REQUIRED_FIELDS = ["id", "name", "summary"] as const;
 const DEFAULT_SCORECARD_MODEL = "rubric-v1";
+
+startSyncWorker();
 
 export type BenchmarkManifest = {
   id: string;
@@ -218,7 +222,21 @@ export async function runBenchmarkScript(
   const scriptPath = join(benchmark.dir, rel);
   if (!existsSync(scriptPath)) throw new Error(`Script not found: ${scriptPath}`);
 
-  const requestedSolution = solution?.trim();
+  let synchronizedSolution: string | undefined;
+  if (runId) {
+    try {
+      synchronizedSolution = await ensureRunSolution(runId);
+    } catch (error) {
+      return {
+        ok: false,
+        exitCode: 2,
+        command: `bash ${scriptPath}`,
+        durationMs: 0,
+        output: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  const requestedSolution = synchronizedSolution ?? solution?.trim();
   const defaultSolution = defaultSolutionPath(benchmark);
   const requestedPath = requestedSolution ? resolve(requestedSolution) : "";
   const solutionPath = requestedPath === resolve(SOLUTIONS_DIR) ? resolve(defaultSolution) : resolve(requestedSolution || defaultSolution);
@@ -547,6 +565,19 @@ function findLocalUrlInLog(logPath: string): string | null {
 
 export async function launchBenchmarkSolution(id: string, solution?: string, runId?: number): Promise<CommandResult> {
   const benchmark = getManifest(id);
+  if (runId) {
+    try {
+      solution = await ensureRunSolution(runId);
+    } catch (error) {
+      return {
+        ok: false,
+        exitCode: 2,
+        command: "launch",
+        durationMs: 0,
+        output: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   // requestedPath is the entry folder the UI tracks; the actual launch may run
   // from a launchable child inside it. The launch registry is keyed by requestedPath.
   const requestedPath = resolve(resolveBenchmarkSolution(benchmark, solution));
@@ -595,6 +626,8 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
     HOST: process.env.HOST ?? "127.0.0.1",
     PORT: String(port),
   };
+  const startedAt = Date.now();
+  let dependencyPreparationCommand: string | null = null;
 
   if (manifestLaunch) {
     const scriptPath = join(benchmark.dir, manifestLaunch);
@@ -610,8 +643,21 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
         ok: false,
         exitCode: 2,
         command: "launch",
-        durationMs: 0,
+        durationMs: Date.now() - startedAt,
         output: `No launch script found in ${join(solutionPath, "package.json")}.\nExpected one of: preview, start, serve, dev.`,
+      };
+    }
+    try {
+      const preparation = await ensurePackageDependencies(solutionPath);
+      dependencyPreparationCommand = preparation.command;
+    } catch (error) {
+      return {
+        ok: false,
+        exitCode: 1,
+        command: "prepare dependencies",
+        durationMs: Date.now() - startedAt,
+        output: error instanceof Error ? error.message : String(error),
+        solutionPath,
       };
     }
     const packageManager = detectPackageManager(solutionPath);
@@ -633,7 +679,6 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
     };
   }
 
-  const startedAt = Date.now();
   const logsDir = join(ROOT, "data", "launch-logs");
   mkdirSync(logsDir, { recursive: true });
   const logPath = join(logsDir, `${benchmark.id}-${Date.now()}.log`);
@@ -682,7 +727,14 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
       exitCode,
       command: displayCommand,
       durationMs: Date.now() - startedAt,
-      output: [`Launch command exited early with code ${exitCode}.`, `Log: ${logPath}`, log].filter(Boolean).join("\n\n"),
+      output: [
+        dependencyPreparationCommand ? `Prepared dependencies with: ${dependencyPreparationCommand}` : "",
+        `Launch command exited early with code ${exitCode}.`,
+        `Log: ${logPath}`,
+        log,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     };
   }
 
@@ -717,6 +769,7 @@ export async function launchBenchmarkSolution(id: string, solution?: string, run
     command: `${displayCommand} (pid ${child.pid})`,
     durationMs: Date.now() - startedAt,
     output: [
+      dependencyPreparationCommand ? `Prepared dependencies with: ${dependencyPreparationCommand}` : "",
       `Started solution from: ${solutionPath}`,
       detectedUrl ? (responded ? `URL: ${detectedUrl}` : `URL candidate: ${detectedUrl} (no HTTP response confirmed yet)`) : "",
       `PID: ${child.pid}`,

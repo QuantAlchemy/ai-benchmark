@@ -35,7 +35,7 @@ Each benchmark is fully self-contained in its own folder, so they run independen
 ## Quick start
 
 ```bash
-pnpm install            # no runtime deps; sets up the `bench` CLI
+pnpm install            # installs the dashboard, CLI, and local sync runtime
 
 pnpm bench list                       # see what's available
 pnpm bench setup asteroid-engine      # fetch the pinned original source
@@ -152,9 +152,78 @@ Run history is stored as reviewable files plus local SQLite metadata:
   so previous solutions are not edited in place,
 - scorecard markdown files under `benchmarks/<benchmark-id>/results/`,
 - local scorecard metadata, structured rubric scores, generated scorecard markdown, and notes in
-  `data/benchmark-history.sqlite` (ignored by git to avoid binary merge conflicts),
+  `${XDG_DATA_HOME:-~/.local/share}/ai-benchmark/benchmark-history.sqlite`,
 - benchmark source snapshots under `benchmarks/<benchmark-id>/source/` after setup.
 
 The dashboard treats a rubric as the template for a scorecard form. Each criterion is
 persisted with a stable id, weight, score, weighted value, and notes, so comparisons can
 group runs by criterion instead of scraping markdown tables.
+
+## Offline-first history synchronization
+
+SQLite remains the durable read/write store on every machine. Creating, editing, verifying,
+or deleting a run commits locally first and queues an outbox operation in the same transaction.
+If Convex is unavailable, the dashboard and CLI continue to work; queued operations retry on
+the next background or manual sync. Convex is the canonical cross-machine event ledger and
+artifact rendezvous, not the local database.
+
+The first launch imports a legacy `data/benchmark-history.sqlite` into the per-user data root
+without modifying or deleting the legacy file. Override the replica root with
+`AI_BENCHMARK_DATA_ROOT` when running isolated clients or tests.
+
+Sign in to the 1Password CLI and generate the server-only local credentials:
+
+```bash
+pnpm env:generate:local
+```
+
+This renders the committed `.env.local.tpl` references into the ignored `.env.local` file using
+an installation-specific client stored in a private 1Password item. For a new installation, run
+`pnpm bench sync-status` first and give its opaque client, principal, host, and installation UUIDs
+to the administrator; provisioning must use the client id already bound to that data root. Store
+that installation's dedicated credentials in the private item referenced by the template:
+
+```dotenv
+AI_BENCHMARK_SYNC_URL=https://your-deployment.convex.site
+AI_BENCHMARK_SYNC_CLIENT_ID=<opaque-client-uuid>
+AI_BENCHMARK_SYNC_CLIENT_TOKEN=<high-entropy-client-token>
+```
+
+Never prefix client credentials with `VITE_`; browser configuration exposes only whether sync
+is enabled. Each data root is permanently bound to its provisioned opaque client id. Use a
+different data root and credential pair for each installation. Before any online push or pull,
+the server-reported identity authenticated by the bearer token must match the client id bound to
+the local data root; a mismatch is recorded as a synchronization error and no data operation runs.
+The principal that creates a synchronized run owns it; only active clients provisioned to that
+same principal may publish later snapshots or tombstones for its run id.
+
+Operational commands:
+
+```bash
+pnpm bench sync-import       # initialize/migrate the local store and legacy history
+pnpm bench sync-status       # inspect outbox count, cursor, and last error
+pnpm bench sync              # force an immediate push/pull cycle
+pnpm bench sync-failures     # list failed/dead-lettered operation ids and errors
+pnpm bench sync-retry <id>   # reset one failed operation for another retry cycle
+pnpm bench sync-discard <id> # explicitly discard one irrecoverable failed operation
+pnpm bench sync-diagnostics  # explain offline/configuration state
+pnpm validate:sync           # run the isolated two-replica HTTP/Verify/Launch acceptance test
+```
+
+Per-operation push or packaging failures retry with backoff and are dead-lettered after eight
+unsuccessful attempts so a permanent authorization or payload error cannot loop forever. Connectivity
+and authentication-preflight failures remain retryable without consuming that per-operation budget.
+Inspect the error before choosing `sync-retry`; use `sync-discard` only when the queued local change
+should be abandoned. When a newer remote artifact supersedes an already materialized solution path,
+the verified old tree is preserved as a hidden `.replaced-*` sibling backup before the new tree is
+installed.
+
+The dashboard header shows `offline only`, `not yet synchronized`, queued/failed/dead-lettered counts,
+`sync error`, or `synced`; dead-lettered entries require the CLI remediation commands above. Launch
+and Verify call the same ensure-local operation: a remote solution
+artifact is downloaded, SHA-256 verified, safely extracted, and atomically materialized before
+execution. Dependency directories remain excluded from portable artifacts; direct Launch reconstructs
+missing JavaScript dependencies with the candidate lockfile (`npm ci`, frozen pnpm/yarn install), or
+uses a non-locking pnpm fallback when no lockfile exists, before starting the package script. Artifacts
+use a strict source allowlist and reject links, traversal, auth files, unsafe archive entries, digest
+mismatches, and overwrite attempts.

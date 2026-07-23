@@ -3,6 +3,7 @@
 // benchmark folders discovered under benchmarks/.
 import { readFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { listBenchmarks, getBenchmark } from "../lib/discover.mjs";
 import { defaultSolutionPath, SOLUTIONS_DIR } from "../lib/paths.mjs";
 import { agentUsage, listAgents, runAgentOnBenchmark } from "../lib/agents.mjs";
@@ -76,6 +77,31 @@ function isDefaultSolution(bench, solution) {
 
 function isEmptyDir(path) {
   return existsSync(path) && readdirSync(path).length === 0;
+}
+
+async function loadSyncRuntime() {
+  for (const name of [".env", ".env.local"]) {
+    const envPath = fileURLToPath(new URL(`../${name}`, import.meta.url));
+    if (existsSync(envPath)) process.loadEnvFile(envPath);
+  }
+  const { tsImport } = await import("tsx/esm/api");
+  return tsImport("../src/lib/sync/sync-runtime.server.ts", import.meta.url);
+}
+
+function printSyncStatus(status) {
+  console.log(`${bold("configured")}  ${status.configured ? green("yes") : yellow("no")}`);
+  console.log(`${bold("client")}      ${status.clientId}`);
+  console.log(`${bold("principal")}   ${status.principalId}`);
+  console.log(`${bold("host")}        ${status.hostId}`);
+  console.log(`${bold("installation")} ${status.installationId}`);
+  console.log(`${bold("data root")}   ${status.dataRoot}`);
+  console.log(`${bold("database")}    ${status.databasePath}`);
+  console.log(`${bold("cursor")}      ${status.cursor}`);
+  console.log(
+    `${bold("outbox")}      ${status.pendingOperations} pending (${status.failedOperations} failed, ${status.deadLetteredOperations} dead-lettered)`,
+  );
+  console.log(`${bold("last sync")}   ${status.lastSyncAt ?? "never"}`);
+  if (status.lastError) console.log(`${bold("last error")}  ${status.lastError}`);
 }
 
 const commands = {
@@ -235,6 +261,82 @@ const commands = {
     console.log(dim("Open it, fill in the scores by hand, and keep it alongside the benchmark."));
   },
 
+  async sync() {
+    heading("Synchronizing benchmark history");
+    const { syncNow } = await loadSyncRuntime();
+    const result = await syncNow();
+    if (!result) {
+      fail("Sync is not configured. Set the server-only AI_BENCHMARK_SYNC_* variables.");
+      process.exit(2);
+    }
+    console.log(`${bold("pushed")}       ${result.pushed}`);
+    console.log(`${bold("pulled")}       ${result.pulled}`);
+    console.log(`${bold("uploaded")}     ${result.uploaded}`);
+    console.log(`${bold("downloaded")}   ${result.downloaded}`);
+    console.log(`${bold("materialized")} ${result.materialized}`);
+    if (result.errors.length) {
+      for (const error of result.errors) fail(error);
+      process.exit(1);
+    }
+    ok("Synchronization complete.");
+  },
+
+  async "sync-status"() {
+    heading("Benchmark sync status");
+    const { getSyncStatus } = await loadSyncRuntime();
+    printSyncStatus(await getSyncStatus());
+  },
+
+  async "sync-import"() {
+    heading("Importing/migrating local benchmark history");
+    const { getSyncStatus } = await loadSyncRuntime();
+    const status = await getSyncStatus();
+    printSyncStatus(status);
+    ok("Local SQLite schema and legacy import are initialized.");
+  },
+
+  async "sync-failures"() {
+    heading("Failed benchmark sync operations");
+    const { getFailedSyncOperations } = await loadSyncRuntime();
+    const operations = getFailedSyncOperations();
+    if (!operations.length) return ok("No failed sync operations.");
+    for (const operation of operations) {
+      console.log(`${bold(operation.operationId)}  ${operation.operationType}  run ${operation.runUid}`);
+      console.log(
+        `  attempts ${operation.attemptCount}${operation.deadLetteredAt ? ` · dead-lettered ${operation.deadLetteredAt}` : ""}`,
+      );
+      if (operation.lastError) console.log(`  ${operation.lastError}`);
+    }
+  },
+
+  async "sync-retry"() {
+    const operationId = positional[0];
+    if (!operationId) throw new Error('"sync-retry" needs an operation id. Run `pnpm bench sync-failures`.');
+    const { retrySyncOperation } = await loadSyncRuntime();
+    retrySyncOperation(operationId);
+    ok(`Queued failed sync operation for retry: ${operationId}`);
+  },
+
+  async "sync-discard"() {
+    const operationId = positional[0];
+    if (!operationId) throw new Error('"sync-discard" needs an operation id. Run `pnpm bench sync-failures`.');
+    const { discardSyncOperation } = await loadSyncRuntime();
+    discardSyncOperation(operationId);
+    warn(`Discarded failed sync operation: ${operationId}`);
+  },
+
+  async "sync-diagnostics"() {
+    heading("Benchmark sync diagnostics");
+    const { getSyncStatus } = await loadSyncRuntime();
+    const status = await getSyncStatus();
+    printSyncStatus(status);
+    if (!status.configured) warn("Remote credentials are absent; offline writes remain enabled and queued locally.");
+    else if (status.deadLetteredOperations) {
+      warn("Dead-lettered operations require `pnpm bench sync-failures`, then `sync-retry` or `sync-discard`.");
+    } else if (status.failedOperations) warn("Failed outbox operations will retry automatically.");
+    else ok("Local sync configuration and durable outbox are healthy.");
+  },
+
   help() {
     heading("ai-benchmark");
     console.log("A small suite of game-code modernization benchmarks for AI models.\n");
@@ -250,6 +352,13 @@ const commands = {
       ["verify <id> [--solution <path>]", "smoke-test a candidate solution (defaults to solutions/<id>/)"],
       ["rubric <id>", "print the manual scoring rubric"],
       ["score <id> [--model <name>] [--force]", "create a scorecard you fill in by hand"],
+      ["sync", "push local changes and pull remote history now"],
+      ["sync-status", "show local outbox, cursor, and configuration status"],
+      ["sync-import", "initialize/migrate the durable local sync database"],
+      ["sync-failures", "list failed outbox operations and remediation details"],
+      ["sync-retry <operation-id>", "reset a failed outbox operation for retry"],
+      ["sync-discard <operation-id>", "explicitly discard an irrecoverable failed operation"],
+      ["sync-diagnostics", "show offline/remote sync diagnostics"],
       ["help", "show this help"],
     ];
     for (const [cmd, desc] of rows) console.log(`  ${green(cmd.padEnd(38))} ${desc}`);

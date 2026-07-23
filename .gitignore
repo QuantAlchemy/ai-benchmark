@@ -2,6 +2,12 @@ node_modules/
 dist/
 .tanstack/
 
+# Local credentials and deployment selection
+.env
+.env.*
+!.env.example
+!.env.local.tpl
+
 # Local runtime state
 data/
 *.sqlite
@@ -9,7 +15,8 @@ data/
 *.sqlite-wal
 benchmarks/*/results/
 
-# Generated benchmark solutions
+# Generated benchmark solutions and the fetched Cruiser Reloaded source bundle
+benchmarks/cruiser-reloaded/source/
 solutions/*/
 
 # OS / editor noise
